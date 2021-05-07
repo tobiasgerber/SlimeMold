@@ -1,0 +1,2681 @@
+---
+title: "Nuc_Analysis"
+author: "Tobias Gerber"
+date: "8/4/2020"
+output: html_document
+---
+
+
+R 3.6
+
+```{r}
+#Load libraries
+
+library(Seurat) #version 3
+library(dplyr)
+library(Matrix)
+
+#Set the working directory
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/SlimeMold/Nuc_Data/")
+
+```
+
+### load your matrix ###
+
+```{r}
+
+data1 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER058/SMv3A_updatedTrans/outs/filtered_feature_bc_matrix/")
+data2 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER058/SMv3B_updatedTrans/outs/filtered_feature_bc_matrix/")
+data3 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER059/SMv3Fan_updatedTrans/outs/filtered_feature_bc_matrix/")
+data4 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER059/SMv3Net_updatedTrans/outs/filtered_feature_bc_matrix/")
+
+############# load in Seurat
+
+Nuc_young_A <- CreateSeuratObject(counts = data1, project = "Nuc_young_A", min.cells = 3, min.features = 100)
+Nuc_young_A
+Nuc_young_B <- CreateSeuratObject(counts = data2, project = "Nuc_young_B", min.cells = 3, min.features = 100)
+Nuc_young_B
+Nuc_old_Fan <- CreateSeuratObject(counts = data3, project = "Nuc_old_Fan", min.cells = 3, min.features = 100)
+Nuc_old_Fan
+Nuc_old_Net <- CreateSeuratObject(counts = data4, project = "Nuc_old_Net", min.cells = 3, min.features = 100)
+Nuc_old_Net
+
+#merge ojects
+#merge(x = NULL, y = NULL, add.cell.ids = NULL, merge.data = TRUE, project = "SeuratProject", ...)
+
+Nuc_all = merge(Nuc_young_A, y = c(Nuc_young_B, Nuc_old_Fan, Nuc_old_Net), add.cell.ids = c("Nuc_young_A","Nuc_young_B", "Nuc_old_Fan", "Nuc_old_Net"), project = "Nuc_integration")
+
+
+```
+
+```{r}
+#Get annotation
+anno = read.delim("/mnt/SingleCellGenomics/genome_data/10xSlimeMoldTranscriptome/41598_2017_12250_MOESM2_ESM.txt.csv",sep = "\t",header = T)
+anno$transcript = gsub(x = anno$transcript,pattern = "_",replacement = "-")
+
+anno.gene = anno[,c("transcript","UniProt_Acc")]
+anno.gene = unique(anno.gene)
+anno.gene$transcript = as.character(anno.gene$transcript)
+anno.gene$UniProt_Acc = as.character(anno.gene$UniProt_Acc)
+rownames(anno.gene) = anno.gene$transcript
+anno.gene$UniProt_Acc[is.na(anno.gene$UniProt_Acc)] = "noGene"
+
+#add unannotated IDs
+anno.gene[setdiff(rownames(Nuc_all),anno.gene$transcript),] = setdiff(rownames(Nuc_all),anno.gene$transcript)
+anno.gene$UniProt_Acc[is.na(anno.gene$UniProt_Acc)] = "noGene"
+
+```
+
+########All transcripts##########
+
+```{r}
+
+
+#mito.genes <- c("ND2","ND1","ND3","ND4","ND4L","ND5","ND6")
+#mito.contig <- intersect(c(rownames(anno)[anno$V2 %in% mito.genes ] , rownames(anno)[anno$V2 %in% anno$V2[grep("^COX",anno$V2)]] ) , rownames(Nuc_all))
+
+
+#Nuc_all[["percent.mt"]] <- PercentageFeatureSet(Nuc_all, features = mito.contig)
+
+
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+#set maximum to 50GB for each worker
+options(future.globals.maxSize = 50000 * 1024^2)
+
+#normalize data
+
+Nuc_all = NormalizeData(Nuc_all)
+
+#plot1 <- FeatureScatter(Nuc_all, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Nuc_all, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Nuc_all_QC_PreFilter.pdf",width=10,height=5)
+VlnPlot(Nuc_all, features = c("nCount_RNA","nFeature_RNA"),pt.size = -1)
+plot2
+dev.off()
+
+Nuc_all <- subset(Nuc_all, subset = nCount_RNA < 4000  )
+
+#plot1 <- FeatureScatter(Nuc_all, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Nuc_all, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+pdf("./Nuc_all_QC_PostFilter.pdf",width=10,height=5)
+VlnPlot(Nuc_all, features = c("nCount_RNA","nFeature_RNA"),pt.size = -1)
+plot2
+dev.off()
+
+
+#get cell cycle genes
+
+#g2m.genes <- cc.genes$g2m.genes
+#g2m.contig <- intersect(rownames(anno)[anno$V2 %in% g2m.genes ] , rownames(Nuc_all) )
+
+#s.genes <- cc.genes$s.genes
+#s.contig <- intersect(rownames(anno)[anno$V2 %in% s.genes ] , rownames(Nuc_all) )
+
+#cell cycle scoring
+#Nuc_all <- CellCycleScoring(Nuc_all, s.features = s.contig, g2m.features = g2m.contig, set.ident = TRUE)
+
+
+#scale
+#ScaleData(  object,  features = NULL,  assay = NULL,  vars.to.regress = NULL,  split.by = NULL,  model.use = "linear",  use.umi = FALSE,  do.scale = TRUE,  do.center = TRUE,  scale.max = 10,  block.size = 1000,  min.cells.to.block = 3000,  verbose = TRUE)
+
+all.genes <- rownames(Nuc_all)
+
+Nuc_all = ScaleData(  Nuc_all, features = all.genes ,vars.to.regress = c("nCount_RNA","nFeature_RNA"))
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+Nuc_all = RunPCA(Nuc_all,features = all.genes,npcs = 100)
+
+#plot PCA heatmaps
+#DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+library(RColorBrewer)
+
+pdf("Nuc_all_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Nuc_all, dims = 1:16, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_all, dims = 17:32, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_all, dims = 33:48, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all, dims = 49:64, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all, dims = 65:80, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all, dims = 81:96, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+dev.off()
+
+#elbow plot
+pdf("Nuc_all_PCelbow.pdf",width=20,height=10)
+ElbowPlot(Nuc_all, ndims = 100)
+dev.off()
+
+#Cluster cells
+Nuc_all<- FindNeighbors(Nuc_all, dims = 1:30)
+Nuc_all <- FindClusters(Nuc_all, resolution = 0.5)
+
+#run UMAP
+#min.dist deafult is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_all = RunUMAP(Nuc_all,dims = 1:30, min.dist = 0.3)
+
+#run tSNE
+Nuc_all = RunTSNE(Nuc_all,dims = 1:30)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_all_Embedding_PC30_res0.5.pdf",width=10,height=10)
+DimPlot(object = Nuc_all, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_all, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_all, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_all, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_all_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_all, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_all, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+#Cluster 2 and 6 are purely driven by low nCount --> remove
+
+Nuc_all = subset(Nuc_all, idents = c(0,1,3,4,5,7,8))
+
+#Cluster cells
+Nuc_all<- FindNeighbors(Nuc_all, dims = 1:30)
+Nuc_all <- FindClusters(Nuc_all, resolution = 0.5)
+
+#run UMAP
+#min.dist deafult is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_all = RunUMAP(Nuc_all,dims = 1:30, min.dist = 0.3)
+
+#run tSNE
+Nuc_all = RunTSNE(Nuc_all,dims = 1:30)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_all_Embedding_PC30_res0.5.pdf",width=10,height=10)
+DimPlot(object = Nuc_all, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_all, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_all, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_all, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_all_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_all, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_all, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+
+
+
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Nuc_all, only.pos = TRUE,  logfc.threshold = 0.1)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno.gene, by.x="gene" , by.y="UniProt_Acc")
+markers.anno$ID = markers.anno$gene
+
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,"Nuc_all_allMarker.csv")
+
+saveRDS(Nuc_all, file = "Nuc_all_SeuratObj.RDS")
+
+```
+
+########Harmony integration############
+
+```{r}
+
+#Integrate
+
+
+library(Seurat)
+library(RColorBrewer)
+library(harmony)
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/SlimeMold/Nuc_Data/")
+
+#Harmony
+
+Nuc_all_int = RunHarmony(object = Nuc_all,group.by.vars= "orig.ident", assay.use = "RNA", dims.use = 1:50, plot_convergence = TRUE, max.iter.cluster = 30 ,max.iter.harmony=50,theta=2,lambda=0.1)
+
+
+#Cluster cells
+Nuc_all_int<- FindNeighbors(Nuc_all_int, dims = 1:15, reduction = "harmony")
+Nuc_all_int <- FindClusters(Nuc_all_int, resolution = 0.8)
+
+
+#run UMAP
+Nuc_all_int = RunUMAP(Nuc_all_int,dims = 1:15, reduction = "harmony", min.dist = 0.001,  spread = 1,)
+#run tSNE
+Nuc_all_int = RunTSNE(Nuc_all_int,dims = 1:15, reduction = "harmony")
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_all_HarmonyInt_t2_l01_PC50_Embedding_PC15_res0.8.pdf",width=10,height=10)
+DimPlot(object = Nuc_all_int, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_all_int, reduction = 'umap',group.by = "orig.ident", pt.size = 2)
+DimPlot(object = Nuc_all_int, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_all_int, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+FeaturePlot(Nuc_all_int, pt.size = 0.2, features = c("nCount_RNA","nFeature_RNA"), order = T, cols = c(brewer.pal(9,"Greys")[9:2],brewer.pal(9,"Reds")[2:9]))
+	
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Nuc_all_int, only.pos = TRUE,  logfc.threshold = 0.1)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno.gene, by.x="gene" , by.y="transcript")
+markers.anno$ID = markers.anno$gene
+
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,"Nuc_all_HarmonyInt_allMarker.csv")
+
+saveRDS(Nuc_all, file = "Nuc_all_HarmonyInt_SeuratObj.RDS")
+
+
+```
+
+###################Using only annotated transcripts###################
+
+```{r}
+
+library(Seurat)
+library(RColorBrewer)
+library(harmony)
+
+#Get annotated transcripts
+anno = read.delim("/mnt/SingleCellGenomics/genome_data/10xSlimeMoldTranscriptome/41598_2017_12250_MOESM2_ESM.txt.csv",sep = "\t",header = T)
+anno = anno[1:49403,]
+colnames(anno) = c("transcript","ORF_length","database","ID","description","from","to","IPR_number","Domain_description","GOterm","Log2_FoldChange","pvalue","baseMean","IfcSE","stat","padj","UniProt_Name","UniProt_ID","UniProt_Acc","Regulation")
+
+anno.gene.id = unique(as.character(anno$transcript))
+
+anno$transcript = gsub(x = anno$transcript,pattern = "_",replacement = "-")
+
+anno.gene = anno[,c("transcript","UniProt_Acc")]
+anno.gene = unique(anno.gene)
+anno.gene$transcript = as.character(anno.gene$transcript)
+anno.gene$UniProt_Acc = as.character(anno.gene$UniProt_Acc)
+rownames(anno.gene) = anno.gene$transcript
+anno.gene$UniProt_Acc[is.na(anno.gene$UniProt_Acc)] = "noGene"
+
+#Get GO information
+anno.GO = anno[,c("transcript","GOterm","ORF_length","description")]
+
+#remove rows without GO assignment
+emptyfields <- rowSums(anno.GO == "") == 1
+anno.GO <- anno.GO[!emptyfields,]
+anno.GO = unique(anno.GO)
+
+anno.GO$transcript = as.character(anno.GO$transcript)
+anno.GO$GOterm = as.character(anno.GO$GOterm)
+anno.GO$ORF_length = as.numeric(anno.GO$ORF_length)
+
+id_list_GO = vector("list")
+id_list_Domain = vector("list")
+ORF_list = vector("list")
+
+for (i in 1:nrow(anno.GO)) {
+  k = anno.GO[i,1]
+  if (k %in% names(id_list_GO)) {
+    if (anno.GO[i,3] == ORF_list[[k]]) {
+      ORF_list[[k]] = anno.GO[i,3]
+      id_list_GO[[k]] = paste(id_list_GO[[k]],anno.GO[i,2],sep = "|")
+      if (id_list_Domain[[k]] == anno.GO[i,4]) {
+        next
+      } else {
+        id_list_Domain[[k]] = paste(id_list_Domain[[k]],anno.GO[i,4],sep = "|")
+      }
+    } else {
+      if (anno.GO[i,3] > ORF_list[[k]]) {
+        ORF_list[[k]] = anno.GO[i,3]
+        id_list_GO[[k]] = anno.GO[i,2]
+        id_list_Domain[[k]] = anno.GO[i,4]
+      } else {
+        next
+      }
+    }
+  } else {
+    id_list_GO[[k]] = anno.GO[i,2]
+    ORF_list[[k]] = anno.GO[i,3]
+    id_list_Domain[[k]] = anno.GO[i,4]
+  }
+}
+
+anno.GO = data.frame(unlist(id_list_GO,use.names = TRUE),stringsAsFactors=F)
+anno.GO$transcript = rownames(anno.GO)
+colnames(anno.GO) = c("GOterm","transcript")
+
+anno.Domain = data.frame(unlist(id_list_Domain,use.names = TRUE),stringsAsFactors=F)
+anno.Domain$transcript = rownames(anno.Domain)
+colnames(anno.Domain) = c("Domain","transcript")
+
+anno.gene = merge(anno.gene,anno.GO, by = "transcript")
+anno.gene = merge(anno.gene,anno.Domain, by = "transcript")
+
+############# get data and remove genes
+
+data1 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER058/SMv3A_updatedTrans/outs/filtered_feature_bc_matrix/")
+data2 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER058/SMv3B_updatedTrans/outs/filtered_feature_bc_matrix/")
+data3 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER059/SMv3Fan_updatedTrans/outs/filtered_feature_bc_matrix/")
+data4 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER059/SMv3Net_updatedTrans/outs/filtered_feature_bc_matrix/")
+
+
+data1 = data1[anno.gene.id, ,drop = FALSE]
+data2 = data2[anno.gene.id, ,drop = FALSE]
+data3 = data3[anno.gene.id, ,drop = FALSE]
+data4 = data4[anno.gene.id, ,drop = FALSE]
+
+############# load in Seurat
+
+Nuc_young_A <- CreateSeuratObject(counts = data1, project = "Nuc_young_A", min.cells = 3, min.features = 100)
+Nuc_young_A
+Nuc_young_B <- CreateSeuratObject(counts = data2, project = "Nuc_young_B", min.cells = 3, min.features = 100)
+Nuc_young_B
+Nuc_old_Fan <- CreateSeuratObject(counts = data3, project = "Nuc_old_Fan", min.cells = 3, min.features = 100)
+Nuc_old_Fan
+Nuc_old_Net <- CreateSeuratObject(counts = data4, project = "Nuc_old_Net", min.cells = 3, min.features = 100)
+Nuc_old_Net
+
+#merge ojects
+#merge(x = NULL, y = NULL, add.cell.ids = NULL, merge.data = TRUE, project = "SeuratProject", ...)
+
+Nuc_all_anno = merge(Nuc_young_A, y = c(Nuc_young_B, Nuc_old_Fan, Nuc_old_Net), add.cell.ids = c("Nuc_young_A","Nuc_young_B", "Nuc_old_Fan", "Nuc_old_Net"), project = "Nuc_integration")
+
+
+```
+
+
+```{r}
+
+
+#mito.genes <- c("ND2","ND1","ND3","ND4","ND4L","ND5","ND6")
+#mito.contig <- intersect(c(rownames(anno)[anno$V2 %in% mito.genes ] , rownames(anno)[anno$V2 %in% anno$V2[grep("^COX",anno$V2)]] ) , rownames(Nuc_all))
+
+
+#Nuc_all_anno[["percent.mt"]] <- PercentageFeatureSet(Nuc_all_anno, features = mito.contig)
+
+
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+#set maximum to 50GB for each worker
+options(future.globals.maxSize = 50000 * 1024^2)
+
+#normalize data
+
+Nuc_all_anno = NormalizeData(Nuc_all_anno)
+
+#plot1 <- FeatureScatter(Nuc_all_anno, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Nuc_all_anno, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Nuc_all_anno_QC_PreFilter.pdf",width=10,height=5)
+VlnPlot(Nuc_all_anno, features = c("nCount_RNA","nFeature_RNA"),pt.size = -1)
+plot2
+dev.off()
+
+Nuc_all_anno <- subset(Nuc_all_anno, subset = nCount_RNA < 4000  )
+
+#plot1 <- FeatureScatter(Nuc_all_anno, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Nuc_all_anno, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+pdf("./Nuc_all_anno_QC_PostFilter.pdf",width=10,height=5)
+VlnPlot(Nuc_all_anno, features = c("nCount_RNA","nFeature_RNA"),pt.size = -1)
+plot2
+dev.off()
+
+
+#get cell cycle genes
+
+#g2m.genes <- cc.genes$g2m.genes
+#g2m.contig <- intersect(rownames(anno)[anno$V2 %in% g2m.genes ] , rownames(Nuc_all_anno) )
+
+#s.genes <- cc.genes$s.genes
+#s.contig <- intersect(rownames(anno)[anno$V2 %in% s.genes ] , rownames(Nuc_all_anno) )
+
+#cell cycle scoring
+#Nuc_all_anno <- CellCycleScoring(Nuc_all_anno, s.features = s.contig, g2m.features = g2m.contig, set.ident = TRUE)
+
+
+#scale
+#ScaleData(  object,  features = NULL,  assay = NULL,  vars.to.regress = NULL,  split.by = NULL,  model.use = "linear",  use.umi = FALSE,  do.scale = TRUE,  do.center = TRUE,  scale.max = 10,  block.size = 1000,  min.cells.to.block = 3000,  verbose = TRUE)
+
+all.genes <- rownames(Nuc_all_anno)
+
+Nuc_all_anno = ScaleData(  Nuc_all_anno, features = all.genes ,vars.to.regress = c("nCount_RNA","nFeature_RNA"))
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+Nuc_all_anno = RunPCA(Nuc_all_anno,features = all.genes,npcs = 100)
+
+#plot PCA heatmaps
+#DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+library(RColorBrewer)
+
+pdf("Nuc_all_anno_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Nuc_all_anno, dims = 1:16, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_all_anno, dims = 17:32, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_all_anno, dims = 33:48, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all_anno, dims = 49:64, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all_anno, dims = 65:80, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all_anno, dims = 81:96, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+dev.off()
+
+#elbow plot
+pdf("Nuc_all_anno_PCelbow.pdf",width=20,height=10)
+ElbowPlot(Nuc_all_anno, ndims = 100)
+dev.off()
+
+#Cluster cells
+Nuc_all_anno<- FindNeighbors(Nuc_all_anno, dims = 1:30)
+Nuc_all_anno <- FindClusters(Nuc_all_anno, resolution = 0.5)
+
+#run UMAP
+#min.dist deafult is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_all_anno = RunUMAP(Nuc_all_anno,dims = 1:30, min.dist = 0.3)
+
+#run tSNE
+Nuc_all_anno = RunTSNE(Nuc_all_anno,dims = 1:30)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_all_anno_Embedding_PC30_res0.5.pdf",width=10,height=10)
+DimPlot(object = Nuc_all_anno, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_all_anno, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_all_anno, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_all_anno, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_all_anno_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_all_anno, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_all_anno, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+#Cluster 1 is purely driven by low nCount --> remove
+
+Nuc_all_anno = subset(Nuc_all_anno, idents = c(0,2,3,4,5,6,7))
+
+#Cluster cells
+Nuc_all_anno<- FindNeighbors(Nuc_all_anno, dims = 1:30)
+Nuc_all_anno <- FindClusters(Nuc_all_anno, resolution = 0.5)
+
+#run UMAP
+#min.dist deafult is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_all_anno = RunUMAP(Nuc_all_anno,dims = 1:30, min.dist = 0.3)
+
+#run tSNE
+Nuc_all_anno = RunTSNE(Nuc_all_anno,dims = 1:30)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_all_anno_Embedding_PC30_res0.5.pdf",width=10,height=10)
+DimPlot(object = Nuc_all_anno, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_all_anno, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_all_anno, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_all_anno, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_all_anno_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_all_anno, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_all_anno, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+
+
+
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Nuc_all_anno, only.pos = TRUE,  logfc.threshold = 0.1)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno.gene, by.x="gene" , by.y="transcript")
+markers.anno$ID = markers.anno$gene
+
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,"Nuc_all_anno_allMarker.csv")
+
+
+gene_ids = c("Phypoly-transcript-00106","Phypoly-transcript-31484","Phypoly-transcript-23354","Phypoly-transcript-31715","Phypoly-transcript-00070","Phypoly-transcript-02160","Phypoly-transcript-00261","Phypoly-transcript-00494","Phypoly-transcript-00408","Phypoly-transcript-03486","Phypoly-transcript-00381","Phypoly-transcript-17752","Phypoly-transcript-08942","Phypoly-transcript-03480","Phypoly-transcript-00199","Phypoly-transcript-03386","Phypoly-transcript-07445","Phypoly-transcript-06269","Phypoly-transcript-06659","Phypoly-transcript-07168","Phypoly-transcript-00819","Phypoly-transcript-08774","Phypoly-transcript-06126","Phypoly-transcript-02531")
+
+gene_names = c(c("GELA_DICDI","Calponin","SMTL2_BOVIN","MYS2_DICDI","MYOI_DICDI","CTXA_DICDI","KI67_HUMAN","DPOLA_XENLA","KIF15_RAT","KIF22_DANRE","TOP2_DICDI","CDC20_DICDI","PICP_PSESR","CALM_SCHPO","FAT2_SCHPO","NALDL_HUMAN","ACAD8_DICDI","TREA_DICDI","PTP2_DICDI","ADH3_EMENI","GRLE_DICDI","PGK_CHICK","LDHA_MACFA","SPO14_YEAST"))
+
+gg_Fig <- FeaturePlot(Nuc_all_anno, pt.size = 0.2, features = gene_ids,order = F, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Nuc_all_anno_feature_ClustMarker.pdf",width=22,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+
+saveRDS(Nuc_all_anno, file = "Nuc_all_anno_SeuratObj.RDS")
+
+```
+
+#######Try to regress out cell cycle#########
+
+```{r}
+Nuc_all_anno_scale = readRDS(file = "Nuc_all_anno_SeuratObj.RDS")
+
+Nuc_all_anno_scale = ScaleData(  Nuc_all_anno_scale, features = all.genes ,vars.to.regress = c("nCount_RNA","nFeature_RNA","Phypoly-transcript-01972","Phypoly-transcript-11723","Phypoly-transcript-00261","Phypoly-transcript-13257","Phypoly-transcript-00566","Phypoly-transcript-00494","Phypoly-transcript-06998","Phypoly-transcript-00921","Phypoly-transcript-00408","Phypoly-transcript-02655","Phypoly-transcript-01379","Phypoly-transcript-05491","Phypoly-transcript-00381","Phypoly-transcript-03486","Phypoly-transcript-17752","Phypoly-transcript-09669","Phypoly-transcript-00073","Phypoly-transcript-00214","Phypoly-transcript-00577","Phypoly-transcript-00364","Phypoly-transcript-02804","Phypoly-transcript-00607","Phypoly-transcript-17240","Phypoly-transcript-01908","Phypoly-transcript-02453","Phypoly-transcript-02836","Phypoly-transcript-00816","Phypoly-transcript-00677","Phypoly-transcript-10858","Phypoly-transcript-05637","Phypoly-transcript-04858","Phypoly-transcript-04037","Phypoly-transcript-00833","Phypoly-transcript-01188","Phypoly-transcript-00639","Phypoly-transcript-28781","Phypoly-transcript-00135","Phypoly-transcript-18969","Phypoly-transcript-00953","Phypoly-transcript-02934","Phypoly-transcript-06678","Phypoly-transcript-00764","Phypoly-transcript-00606","Phypoly-transcript-07269"))
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+
+all.genes <- rownames(Nuc_all_anno_scale)
+
+Nuc_all_anno_scale = RunPCA(Nuc_all_anno_scale,features = all.genes,npcs = 100)
+
+#plot PCA heatmaps
+#DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+library(RColorBrewer)
+
+pdf("Nuc_all_anno_cc_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Nuc_all_anno_scale, dims = 1:16, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_all_anno_scale, dims = 17:32, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_all_anno_scale, dims = 33:48, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all_anno_scale, dims = 49:64, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all_anno_scale, dims = 65:80, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_all_anno_scale, dims = 81:96, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+dev.off()
+
+#elbow plot
+pdf("Nuc_all_anno_cc_PCelbow.pdf",width=20,height=10)
+ElbowPlot(Nuc_all_anno_scale, ndims = 100)
+dev.off()
+
+#Cluster cells
+Nuc_all_anno_scale<- FindNeighbors(Nuc_all_anno_scale, dims = 1:30)
+Nuc_all_anno_scale <- FindClusters(Nuc_all_anno_scale, resolution = 0.5)
+
+#run UMAP
+#min.dist deafult is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_all_anno_scale = RunUMAP(Nuc_all_anno_scale,dims = 1:30, min.dist = 0.3)
+
+#run tSNE
+Nuc_all_anno_scale = RunTSNE(Nuc_all_anno_scale,dims = 1:30)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_all_anno_cc_Embedding_PC30_res0.5.pdf",width=10,height=10)
+DimPlot(object = Nuc_all_anno_scale, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_all_anno_scale, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_all_anno_scale, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_all_anno_scale, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_all_anno_cc_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_all_anno_scale, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_all_anno_scale, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+saveRDS(Nuc_all_anno_scale, file = "Nuc_all_anno_cc_SeuratObj.RDS")
+
+############does not look different...
+
+```
+
+
+
+########Harmony integration############
+
+```{r}
+Nuc_all_anno = readRDS(file = "Nuc_all_anno_SeuratObj.RDS")
+
+#Integrate
+
+library(Seurat)
+library(RColorBrewer)
+library(harmony)
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/SlimeMold/Nuc_Data/")
+
+#Harmony
+
+Nuc_all_anno_int = RunHarmony(object = Nuc_all_anno,group.by.vars= "orig.ident", assay.use = "RNA", dims.use = 1:20, plot_convergence = TRUE, max.iter.cluster = 30 ,max.iter.harmony=50,theta=2,lambda=0.001)
+
+
+#Cluster cells
+Nuc_all_anno_int<- FindNeighbors(Nuc_all_anno_int, dims = 1:10, reduction = "harmony")
+Nuc_all_anno_int <- FindClusters(Nuc_all_anno_int, resolution = 0.3)
+
+
+#run UMAP
+Nuc_all_anno_int = RunUMAP(Nuc_all_anno_int,dims = 1:10, reduction = "harmony", min.dist = 0.001,  spread = 1,)
+#run tSNE
+Nuc_all_anno_int = RunTSNE(Nuc_all_anno_int,dims = 1:10, reduction = "harmony")
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_all_anno_HarmonyInt_t2_l0001_PC20_Embedding_PC10_res0.3.pdf",width=10,height=10)
+DimPlot(object = Nuc_all_anno_int, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_all_anno_int, reduction = 'umap',group.by = "orig.ident", pt.size = 2)
+DimPlot(object = Nuc_all_anno_int, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_all_anno_int, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+FeaturePlot(Nuc_all_anno_int, pt.size = 0.2, features = c("nCount_RNA","nFeature_RNA"), order = T, cols = c(brewer.pal(9,"Greys")[9:2],brewer.pal(9,"Reds")[2:9]))
+	
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Nuc_all_anno_int, only.pos = TRUE,  logfc.threshold = 0.1)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno.gene, by.x="gene" , by.y="transcript")
+markers.anno$ID = markers.anno$gene
+
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,"Nuc_all_anno_HarmonyInt_allMarker.csv")
+
+
+library(reshape2)
+c0 = unlist(strsplit(markers.anno$GOterm[markers.anno$cluster == 0], "\\|"))
+c0 = data.frame(melt(table(c0)))
+m = mean(c0$value)
+s = sd(c0$value)
+c0$z = (c0$value - m) / s
+c0_GO = as.character(c0$c0[c0$z > 1])
+
+c1 = unlist(strsplit(markers.anno$GOterm[markers.anno$cluster == 1], "\\|"))
+c1 = data.frame(melt(table(c1)))
+m = mean(c1$value)
+s = sd(c1$value)
+c1$z = (c1$value - m) / s
+c1_GO = as.character(c1$c1[c1$z > 1])
+    
+c2 = unlist(strsplit(markers.anno$GOterm[markers.anno$cluster == 2], "\\|"))
+c2 = data.frame(melt(table(c2)))
+m = mean(c2$value)
+s = sd(c2$value)
+c2$z = (c2$value - m) / s
+c2_GO = as.character(c2$c2[c2$z > 1])
+    
+c3 = unlist(strsplit(markers.anno$GOterm[markers.anno$cluster == 3], "\\|"))
+c3 = data.frame(melt(table(c3)))
+m = mean(c3$value)
+s = sd(c3$value)
+c3$z = (c3$value - m) / s
+c3_GO = as.character(c3$c3[c3$z > 1])
+    
+c4 = unlist(strsplit(markers.anno$GOterm[markers.anno$cluster == 4], "\\|"))
+c4 = data.frame(melt(table(c4)))
+m = mean(c4$value)
+s = sd(c4$value)
+c4$z = (c4$value - m) / s
+c4_GO = as.character(c4$c4[c4$z > 1])
+   
+#identify terms that are found in at least 6 of the 9 clusters and remove them
+
+multiple = melt(table(c(c0_GO,c1_GO,c2_GO,c3_GO,c4_GO)))
+multiple = as.character(multiple$Var1[multiple$value > 1])
+
+c0_GO = c0_GO[!c0_GO %in% multiple]
+c1_GO = c1_GO[!c1_GO %in% multiple]
+c2_GO = c2_GO[!c2_GO %in% multiple]
+c3_GO = c3_GO[!c3_GO %in% multiple]
+c4_GO = c4_GO[!c4_GO %in% multiple]
+
+
+all_GO = cbind(c0 = c0_GO, c1 = c1_GO, c2 = c2_GO, c3 = c3_GO, c4 = c4_GO)
+
+write.table(all_GO,"Nuc_all_anno_HarmonyInt_enrichedGOterms.csv",sep = "\t",row.names = F)
+
+saveRDS(Nuc_all_anno_int, file = "Nuc_all_anno_HarmonyInt_SeuratObj.RDS")
+
+```
+
+#######Plot some markers#########
+
+```{r}
+gene_ids = c("Phypoly-transcript-00106","Phypoly-transcript-31484","Phypoly-transcript-23354","Phypoly-transcript-31715","Phypoly-transcript-00070","Phypoly-transcript-02160","Phypoly-transcript-00261","Phypoly-transcript-00494","Phypoly-transcript-00408","Phypoly-transcript-03486","Phypoly-transcript-00381","Phypoly-transcript-17752","Phypoly-transcript-08942","Phypoly-transcript-03480","Phypoly-transcript-00199","Phypoly-transcript-03386","Phypoly-transcript-07445","Phypoly-transcript-06269","Phypoly-transcript-06659","Phypoly-transcript-07168","Phypoly-transcript-00819","Phypoly-transcript-08774","Phypoly-transcript-06126","Phypoly-transcript-02531")
+
+gene_names = c(c("GELA_DICDI","Calponin","SMTL2_BOVIN","MYS2_DICDI","MYOI_DICDI","CTXA_DICDI","KI67_HUMAN","DPOLA_XENLA","KIF15_RAT","KIF22_DANRE","TOP2_DICDI","CDC20_DICDI","PICP_PSESR","CALM_SCHPO","FAT2_SCHPO","NALDL_HUMAN","ACAD8_DICDI","TREA_DICDI","PTP2_DICDI","ADH3_EMENI","GRLE_DICDI","PGK_CHICK","LDHA_MACFA","SPO14_YEAST"))
+
+gg_Fig <- FeaturePlot(Nuc_all_anno_int, pt.size = 0.2, features = gene_ids,order = F, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Nuc_all_anno_HarmonyInt_feature_ClustMarker.pdf",width=25,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+#plot cluster marker on unintegrated data
+
+gene_ids = c("Phypoly-transcript-00106","Phypoly-transcript-31484","Phypoly-transcript-23354","Phypoly-transcript-31715","Phypoly-transcript-00070","Phypoly-transcript-02160","Phypoly-transcript-00261","Phypoly-transcript-00494","Phypoly-transcript-00408","Phypoly-transcript-03486","Phypoly-transcript-00381","Phypoly-transcript-17752","Phypoly-transcript-08942","Phypoly-transcript-03480","Phypoly-transcript-00199","Phypoly-transcript-03386","Phypoly-transcript-07445","Phypoly-transcript-06269","Phypoly-transcript-06659","Phypoly-transcript-07168","Phypoly-transcript-00819","Phypoly-transcript-08774","Phypoly-transcript-06126","Phypoly-transcript-02531")
+
+gene_names = c(c("GELA_DICDI","Calponin","SMTL2_BOVIN","MYS2_DICDI","MYOI_DICDI","CTXA_DICDI","KI67_HUMAN","DPOLA_XENLA","KIF15_RAT","KIF22_DANRE","TOP2_DICDI","CDC20_DICDI","PICP_PSESR","CALM_SCHPO","FAT2_SCHPO","NALDL_HUMAN","ACAD8_DICDI","TREA_DICDI","PTP2_DICDI","ADH3_EMENI","GRLE_DICDI","PGK_CHICK","LDHA_MACFA","SPO14_YEAST"))
+
+gg_Fig <- FeaturePlot(Nuc_all_anno, pt.size = 0.2, features = gene_ids,order = F, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Nuc_all_anno_feature_IntClustMarker.pdf",width=25,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+
+
+#randomize plot order
+
+plot.df = FetchData(Nuc_all_anno_int, c("UMAP_1","UMAP_2","ident","orig.ident"))
+plot.df$order = sample(1:nrow(plot.df),nrow(plot.df))
+plot.df = plot.df[order(plot.df$order),]
+
+pdf("Nuc_all_anno_HarmonyInt_t2_l0001_PC20_Embedding_PC10_res0.3.pdf_paper.pdf",width=10,height=10)
+
+ggplot(plot.df, aes(UMAP_1,UMAP_2, color=ident))  + geom_point( size=2 ) + scale_color_manual(values = c('#88CCEE', '#44AA99', '#117733', '#332288', '#DDCC77', '#999933','#CC6677', '#882255', '#AA4499', '#DDDDDD')) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+ggplot(plot.df, aes(UMAP_1,UMAP_2, color=orig.ident))  + geom_point( size=2 ) + scale_color_manual(values = c( "#56B4E9", "#009E73","#E69F00", "#F0E442")) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+dev.off()
+
+#plot cluster composition
+
+plot.df = FetchData(Nuc_all_anno_int, c("UMAP_1","UMAP_2","ident","orig.ident"))
+plot.df.sub = plot.df[plot.df$ident == 0,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_all_anno_HarmonyInt_Pie_c0.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("#56B4E9", "#009E73","#E69F00", "#F0E442"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+plot.df.sub = plot.df[plot.df$ident == 1,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_all_anno_HarmonyInt_Pie_c1.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("#56B4E9", "#009E73","#E69F00", "#F0E442"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+plot.df.sub = plot.df[plot.df$ident == 2,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_all_anno_HarmonyInt_Pie_c2.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("#56B4E9", "#009E73","#E69F00", "#F0E442"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+  
+plot.df.sub = plot.df[plot.df$ident == 3,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_all_anno_HarmonyInt_Pie_c3.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("#56B4E9", "#009E73","#E69F00", "#F0E442"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+plot.df.sub = plot.df[plot.df$ident == 4,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_all_anno_HarmonyInt_Pie_c4.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("#56B4E9", "#009E73","#E69F00", "#F0E442"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+
+
+
+```
+
+########### Run young and old separate #############
+
+```{r}
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/SlimeMold/Nuc_Data/")
+
+library(Seurat)
+library(RColorBrewer)
+library(harmony)
+
+#Get annotated transcripts
+anno = read.delim("/mnt/SingleCellGenomics/genome_data/10xSlimeMoldTranscriptome/41598_2017_12250_MOESM2_ESM.txt.csv",sep = "\t",header = T)
+anno = anno[1:49403,]
+colnames(anno) = c("transcript","ORF_length","database","ID","description","from","to","IPR_number","Domain_description","GOterm","Log2_FoldChange","pvalue","baseMean","IfcSE","stat","padj","UniProt_Name","UniProt_ID","UniProt_Acc","Regulation")
+
+anno.gene.id = unique(as.character(anno$transcript))
+
+anno$transcript = gsub(x = anno$transcript,pattern = "_",replacement = "-")
+
+anno.gene = anno[,c("transcript","UniProt_Acc")]
+anno.gene = unique(anno.gene)
+anno.gene$transcript = as.character(anno.gene$transcript)
+anno.gene$UniProt_Acc = as.character(anno.gene$UniProt_Acc)
+rownames(anno.gene) = anno.gene$transcript
+anno.gene$UniProt_Acc[is.na(anno.gene$UniProt_Acc)] = "noGene"
+
+#Get GO information
+anno.GO = anno[,c("transcript","GOterm","ORF_length","description")]
+
+#remove rows without GO assignment
+emptyfields <- rowSums(anno.GO == "") == 1
+anno.GO <- anno.GO[!emptyfields,]
+anno.GO = unique(anno.GO)
+
+anno.GO$transcript = as.character(anno.GO$transcript)
+anno.GO$GOterm = as.character(anno.GO$GOterm)
+anno.GO$ORF_length = as.numeric(anno.GO$ORF_length)
+
+id_list_GO = vector("list")
+id_list_Domain = vector("list")
+ORF_list = vector("list")
+
+for (i in 1:nrow(anno.GO)) {
+  k = anno.GO[i,1]
+  if (k %in% names(id_list_GO)) {
+    if (anno.GO[i,3] == ORF_list[[k]]) {
+      ORF_list[[k]] = anno.GO[i,3]
+      id_list_GO[[k]] = paste(id_list_GO[[k]],anno.GO[i,2],sep = "|")
+      if (id_list_Domain[[k]] == anno.GO[i,4]) {
+        next
+      } else {
+        id_list_Domain[[k]] = paste(id_list_Domain[[k]],anno.GO[i,4],sep = "|")
+      }
+    } else {
+      if (anno.GO[i,3] > ORF_list[[k]]) {
+        ORF_list[[k]] = anno.GO[i,3]
+        id_list_GO[[k]] = anno.GO[i,2]
+        id_list_Domain[[k]] = anno.GO[i,4]
+      } else {
+        next
+      }
+    }
+  } else {
+    id_list_GO[[k]] = anno.GO[i,2]
+    ORF_list[[k]] = anno.GO[i,3]
+    id_list_Domain[[k]] = anno.GO[i,4]
+  }
+}
+
+anno.GO = data.frame(unlist(id_list_GO,use.names = TRUE),stringsAsFactors=F)
+anno.GO$transcript = rownames(anno.GO)
+colnames(anno.GO) = c("GOterm","transcript")
+
+anno.Domain = data.frame(unlist(id_list_Domain,use.names = TRUE),stringsAsFactors=F)
+anno.Domain$transcript = rownames(anno.Domain)
+colnames(anno.Domain) = c("Domain","transcript")
+
+anno.gene = merge(anno.gene,anno.GO, by = "transcript")
+anno.gene = merge(anno.gene,anno.Domain, by = "transcript")
+
+############# get data and remove genes
+
+data1 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER058/SMv3A_updatedTrans/outs/filtered_feature_bc_matrix/")
+data2 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER058/SMv3B_updatedTrans/outs/filtered_feature_bc_matrix/")
+data3 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER059/SMv3Fan_updatedTrans/outs/filtered_feature_bc_matrix/")
+data4 <- Read10X(data.dir = "/mnt/SingleCellGenomics/scg_projects/SlimeMold/GER059/SMv3Net_updatedTrans/outs/filtered_feature_bc_matrix/")
+
+
+data1 = data1[anno.gene.id, ,drop = FALSE]
+data2 = data2[anno.gene.id, ,drop = FALSE]
+data3 = data3[anno.gene.id, ,drop = FALSE]
+data4 = data4[anno.gene.id, ,drop = FALSE]
+
+############# load in Seurat
+
+Nuc_young_A <- CreateSeuratObject(counts = data1, project = "Nuc_young_A", min.cells = 3, min.features = 100)
+Nuc_young_A
+Nuc_young_B <- CreateSeuratObject(counts = data2, project = "Nuc_young_B", min.cells = 3, min.features = 100)
+Nuc_young_B
+Nuc_old_Fan <- CreateSeuratObject(counts = data3, project = "Nuc_old_Fan", min.cells = 3, min.features = 100)
+Nuc_old_Fan
+Nuc_old_Net <- CreateSeuratObject(counts = data4, project = "Nuc_old_Net", min.cells = 3, min.features = 100)
+Nuc_old_Net
+```
+
+##old
+```{r}
+#merge ojects
+#merge(x = NULL, y = NULL, add.cell.ids = NULL, merge.data = TRUE, project = "SeuratProject", ...)
+
+Nuc_old = merge(Nuc_old_Fan, Nuc_old_Net, add.cell.ids = c("Nuc_old_Fan", "Nuc_old_Net"), project = "Nuc_old")
+
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+#set maximum to 50GB for each worker
+options(future.globals.maxSize = 50000 * 1024^2)
+
+#normalize data
+
+Nuc_old = NormalizeData(Nuc_old)
+
+#plot1 <- FeatureScatter(Nuc_all_anno, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Nuc_old, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Nuc_old_anno_QC_PreFilter.pdf",width=10,height=5)
+VlnPlot(Nuc_old, features = c("nCount_RNA","nFeature_RNA"),pt.size = -1)
+plot2
+dev.off()
+
+Nuc_old <- subset(Nuc_old, subset = nCount_RNA < 3000  )
+
+#plot1 <- FeatureScatter(Nuc_all_anno, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Nuc_old, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+pdf("./Nuc_all_anno_QC_PostFilter.pdf",width=10,height=5)
+VlnPlot(Nuc_old, features = c("nCount_RNA","nFeature_RNA"),pt.size = -1)
+plot2
+dev.off()
+
+
+#get cell cycle genes
+
+#g2m.genes <- cc.genes$g2m.genes
+#g2m.contig <- intersect(rownames(anno)[anno$V2 %in% g2m.genes ] , rownames(Nuc_all_anno) )
+
+#s.genes <- cc.genes$s.genes
+#s.contig <- intersect(rownames(anno)[anno$V2 %in% s.genes ] , rownames(Nuc_all_anno) )
+
+#cell cycle scoring
+#Nuc_all_anno <- CellCycleScoring(Nuc_all_anno, s.features = s.contig, g2m.features = g2m.contig, set.ident = TRUE)
+
+
+#scale
+#ScaleData(  object,  features = NULL,  assay = NULL,  vars.to.regress = NULL,  split.by = NULL,  model.use = "linear",  use.umi = FALSE,  do.scale = TRUE,  do.center = TRUE,  scale.max = 10,  block.size = 1000,  min.cells.to.block = 3000,  verbose = TRUE)
+
+all.genes <- rownames(Nuc_old)
+
+Nuc_old = ScaleData(  Nuc_old, features = all.genes ,vars.to.regress = c("nCount_RNA","nFeature_RNA"))
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+Nuc_old = RunPCA(Nuc_old,features = all.genes,npcs = 100)
+
+#plot PCA heatmaps
+#DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+library(RColorBrewer)
+
+pdf("Nuc_old_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Nuc_old, dims = 1:16, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_old, dims = 17:32, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_old, dims = 33:48, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_old, dims = 49:64, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_old, dims = 65:80, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_old, dims = 81:96, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+dev.off()
+
+#elbow plot
+pdf("Nuc_old_PCelbow.pdf",width=20,height=10)
+ElbowPlot(Nuc_old, ndims = 100)
+dev.off()
+
+#Cluster cells
+Nuc_old<- FindNeighbors(Nuc_old, dims = 1:15)
+Nuc_old <- FindClusters(Nuc_old, resolution = 0.3)
+
+#run UMAP
+#min.dist deafult is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_old = RunUMAP(Nuc_old,dims = 1:15, min.dist = 0.001)
+
+#run tSNE
+Nuc_old = RunTSNE(Nuc_old,dims = 1:15)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_old_Embedding_PC15_res0.3.pdf",width=10,height=10)
+DimPlot(object = Nuc_old, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_old, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_old, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_old, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_old_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_old, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_old, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Nuc_old, only.pos = TRUE,  logfc.threshold = 0.2)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno.gene, by.x="gene" , by.y="transcript")
+markers.anno$ID = markers.anno$gene
+
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,("Nuc_old_allMarker.csv"))
+
+
+saveRDS(Nuc_old, file = "Nuc_old_anno_SeuratObj.RDS")
+
+
+########## plotting features
+
+
+
+
+#randomize plot order
+
+plot.df = FetchData(Nuc_old, c("UMAP_1","UMAP_2","ident","orig.ident"))
+plot.df$order = sample(1:nrow(plot.df),nrow(plot.df))
+plot.df = plot.df[order(plot.df$order),]
+
+pdf("Nuc_old_anno_paper.pdf",width=10,height=10)
+
+ggplot(plot.df, aes(UMAP_1,UMAP_2, color=ident))  + geom_point( size=2 ) + scale_color_manual(values = c('#88CCEE', '#44AA99', '#999933','#CC6677', '#882255', '#117733', '#332288', '#DDCC77', '#AA4499', '#DDDDDD')) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+ggplot(plot.df, aes(UMAP_1,UMAP_2, color=orig.ident))  + geom_point( size=2 ) + scale_color_manual(values = c( "gray30", "gray70")) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+dev.off()
+
+#plot cluster composition
+
+plot.df = FetchData(Nuc_old, c("UMAP_1","UMAP_2","ident","orig.ident"))
+plot.df.sub = plot.df[plot.df$ident == 0,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_old_anno_Pie_c0.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var.1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("gray30", "gray70"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+plot.df.sub = plot.df[plot.df$ident == 1,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_old_anno_Pie_c1.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var.1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("gray30", "gray70"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+plot.df.sub = plot.df[plot.df$ident == 2,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_old_anno_Pie_c2.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var.1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("gray30", "gray70"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+  
+plot.df.sub = plot.df[plot.df$ident == 3,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_old_anno_Pie_c3.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var.1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("gray30", "gray70"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+plot.df.sub = plot.df[plot.df$ident == 4,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_old_anno_Pie_c4.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var.1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("gray30", "gray70"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+plot.df.sub = plot.df[plot.df$ident == 5,]
+plot.df.sub = melt(table(plot.df.sub$orig.ident))
+
+pdf("./Nuc_old_anno_Pie_c5.pdf",  width = 10, height = 10)
+ggplot(data=plot.df.sub, aes(x="", y=value, fill = Var.1)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + scale_fill_manual(values = c("gray30", "gray70"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+
+#plot cluster composition as stacked barplot
+
+
+tmp = plot.df[plot.df$ident == 0,]
+plot.df.sub = melt(table(tmp$orig.ident))
+plot.df.sub$clust = 0
+tmp = plot.df[plot.df$ident == 1,]
+tmp = melt(table(tmp$orig.ident))
+tmp$clust = 1
+plot.df.sub = rbind(plot.df.sub,tmp)
+tmp = plot.df[plot.df$ident == 2,]
+tmp = melt(table(tmp$orig.ident))
+tmp$clust = 2
+plot.df.sub = rbind(plot.df.sub,tmp)
+tmp = plot.df[plot.df$ident == 3,]
+tmp = melt(table(tmp$orig.ident))
+tmp$clust = 3
+plot.df.sub = rbind(plot.df.sub,tmp)
+tmp = plot.df[plot.df$ident == 4,]
+tmp = melt(table(tmp$orig.ident))
+tmp$clust = 4
+plot.df.sub = rbind(plot.df.sub,tmp)
+tmp = plot.df[plot.df$ident == 5,]
+tmp = melt(table(tmp$orig.ident))
+tmp$clust = 5
+plot.df.sub = rbind(plot.df.sub,tmp)
+
+
+pdf("./Nuc_old_anno_StackBar.pdf",  width = 10, height = 10)
+ggplot(plot.df.sub, aes(fill=Var.1, y=value, x=clust)) +  geom_bar(position="fill", stat="identity") + scale_fill_manual(values = c("gray30", "gray70"))+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+
+
+gene_names = c("UBE2C_DICDI",
+"PIF1_HUMAN",
+"AMT1_DICDI",
+"Y5393_ARATH",
+"KRP95_STRPU",
+"DDX60_HUMAN",
+"RIP3_DICDI",
+"MYOF_XENTR",
+"ACAD8_DICDI",
+"MOAC_XANAC",
+"RFFL_HUMAN",
+"PTP2_DICDI",
+"GRLE_DICDI",
+"ADH3_EMENI",
+"PAKC_DICDI",
+"SPO14_YEAST",
+"PGK_CHICK",
+"GEFM_DICDI",
+"ENG2_SCHPO",
+"PHS1_DICDI",
+"MASY_MYXXD",
+"SPO14_YEAST",
+"FAT2_SCHPO",
+"GUAA_DICDI",
+"DIMB_DICDI",
+"Y8969_DICDI",
+"RACH_DICDI",
+"SCFD1_DICDI",
+"PICP_PSESR",
+"ABCG2_DICDI",
+"MFSD8_DANRE",
+"MGP2_DICDI",
+"TRI72_RABIT",
+"KCND1_HUMAN",
+"YGI2_SCHPO",
+"DYH1_RAT",
+"LAMA_DROME",
+"T2FA_DICDI",
+"AGO9_ARATH",
+"FBLN4_CRIGR")
+
+gene_ids = c("Phypoly-transcript-20628",
+"Phypoly-transcript-23076",
+"Phypoly-transcript-07103",
+"Phypoly-transcript-07601",
+"Phypoly-transcript-01362",
+"Phypoly-transcript-01424",
+"Phypoly-transcript-02566",
+"Phypoly-transcript-00593",
+"Phypoly-transcript-07445",
+"Phypoly-transcript-30521",
+"Phypoly-transcript-04124",
+"Phypoly-transcript-06659",
+"Phypoly-transcript-00819",
+"Phypoly-transcript-07168",
+"Phypoly-transcript-04940",
+"Phypoly-transcript-02531",
+"Phypoly-transcript-08774",
+"Phypoly-transcript-02618",
+"Phypoly-transcript-02507",
+"Phypoly-transcript-02090",
+"Phypoly-transcript-01286",
+"Phypoly-transcript-02390",
+"Phypoly-transcript-00199",
+"Phypoly-transcript-04561",
+"Phypoly-transcript-07397",
+"Phypoly-transcript-04372",
+"Phypoly-transcript-16297",
+"Phypoly-transcript-02333",
+"Phypoly-transcript-08942",
+"Phypoly-transcript-00883",
+"Phypoly-transcript-04492",
+"Phypoly-transcript-00482",
+"Phypoly-transcript-15910",
+"Phypoly-transcript-04246",
+"Phypoly-transcript-11167",
+"Phypoly-transcript-26083",
+"Phypoly-transcript-00008",
+"Phypoly-transcript-05487",
+"Phypoly-transcript-01719",
+"Phypoly-transcript-01314")
+
+
+gg_Fig <- FeaturePlot(Nuc_old, pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Nuc_old_anno_feature_ClustMarker.pdf",width=35,height=30)
+CombinePlots( gg_Fig )
+dev.off()
+		
+
+#Selected marker
+
+gene_names = c("MYOD_DICDI",
+"MYOM_DICDI",
+"MYOJ_DICDI",
+"MYOC_DICDI",
+"MYO9A_HUMAN",
+"MYS2_DICDI",
+"MYOH_DICDI",
+"MYOF_HUMAN",
+"MYOE_DICDI",
+"MYOI_DICDI",
+"ACTNA_DICDI",
+"ACTNA_DICDI",
+"ACTN3_MOUSE",
+"ACT6_DIPDE",
+"ACTN4_CHICK",
+"ACTA_PHYPO",
+"ACL6B_HUMAN",
+"ACTP_ACACA",
+"RB11C_DICDI",
+"CYP3_CAEEL",
+"MSMOB_DICDI",
+"V246_FOWPN")
+
+
+gene_ids = c("Phypoly-transcript-21403",
+"Phypoly-transcript-01397",
+"Phypoly-transcript-04150",
+"Phypoly-transcript-00804",
+"Phypoly-transcript-29127",
+"Phypoly-transcript-12130",
+"Phypoly-transcript-00390",
+"Phypoly-transcript-00462",
+"Phypoly-transcript-01523",
+"Phypoly-transcript-00070",
+"Phypoly-transcript-00905",
+"Phypoly-transcript-02032",
+"Phypoly-transcript-02172",
+"Phypoly-transcript-02606",
+"Phypoly-transcript-04140",
+"Phypoly-transcript-10401",
+"Phypoly-transcript-10433",
+"Phypoly-transcript-20142",
+"Phypoly-transcript-29889",
+"Phypoly-transcript-20830",
+"Phypoly-transcript-15382",
+"Phypoly-transcript-20059")
+
+gg_Fig <- FeaturePlot(Nuc_old, reduction = 'umap', pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_old_anno_feature_SelectedMarker.pdf",width=22,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+gene_names = c("SR1B_PHYPO",
+"SCP1_ASTLP",
+"SYYC_CHICK",
+"RHP26_SCHPO",
+"ADH6_YEAST",
+"ELAV2_XENTR",
+"CPAS1_DICDI",
+"NPHP3_MOUSE",
+"RS30_PLAF7",
+"YFMJ_BACSU",
+"RACH_DICDI",
+"MFSD8_DANRE",
+"PASDomain",
+"YVDB_BACSU",
+"MFS10_BOVIN",
+"ASNS_SCHPO",
+"SPXS4_DICDI")
+
+gene_ids = c("Phypoly-transcript-15654",
+"Phypoly-transcript-17763",
+"Phypoly-transcript-05209",
+"Phypoly-transcript-00778",
+"Phypoly-transcript-15025",
+"Phypoly-transcript-13086",
+"Phypoly-transcript-17606",
+"Phypoly-transcript-04537",
+"Phypoly-transcript-21996",
+"Phypoly-transcript-22446",
+"Phypoly-transcript-16297",
+"Phypoly-transcript-04492",
+"Phypoly-transcript-26096",
+"Phypoly-transcript-04627",
+"Phypoly-transcript-09824",
+"Phypoly-transcript-05971",
+"Phypoly-transcript-02158")
+
+gg_Fig <- FeaturePlot(Nuc_old, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_old_anno_feature_BSS4Marker.pdf",width=25,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+		
+#ClustMarker as heatmap
+gene_names = c("AMT1_DICDI",
+"PIF1_HUMAN",
+"GELA_DICDI",
+"NOXA1_HUMAN",
+"GP157_HUMAN",
+"PTP2_DICDI",
+"GRLE_DICDI",
+"MRKB_DICDI",
+"ADH3_EMENI",
+"PHS1_DICDI",
+"RS9_PSEPK",
+"ACAD8_DICDI",
+"POLX_TOBAC",
+"DUSPR_DICDI",
+"MOAC_XANAC",
+"Y5393_ARATH",
+"RN213_MOUSE",
+"RIP3_DICDI",
+"RBP9X_DROME",
+"MSHA_ACTMD",	
+"FAT2_SCHPO",
+"GUAA_DICDI",
+"ABCG2_DICDI",
+"ATC1_DICDI",
+"NUD14_ARATH")
+gene_ids = c("Phypoly-transcript-07103",
+"Phypoly-transcript-23076",
+"Phypoly-transcript-15416",
+"Phypoly-transcript-02483",
+"Phypoly-transcript-08233",
+"Phypoly-transcript-06659",
+"Phypoly-transcript-00819",
+"Phypoly-transcript-02301",
+"Phypoly-transcript-07168",
+"Phypoly-transcript-02090",
+"Phypoly-transcript-09662",
+"Phypoly-transcript-07445",
+"Phypoly-transcript-03051",
+"Phypoly-transcript-07442",
+"Phypoly-transcript-30521",
+"Phypoly-transcript-07601",
+"Phypoly-transcript-00016",
+"Phypoly-transcript-02566",
+"Phypoly-transcript-00612",
+"Phypoly-transcript-01666",
+"Phypoly-transcript-00199",
+"Phypoly-transcript-04561",
+"Phypoly-transcript-00883",
+"Phypoly-transcript-01228",
+"Phypoly-transcript-05430")
+
+#on heatmap
+my_levels <- c(0,3,2,1,4,5)
+levels(Nuc_old) <- my_levels
+
+pdf("Nuc_old_Heatmap_feature_TopClustMarker.pdf.pdf",width=5,height=5)
+DoHeatmap(subset(Nuc_old, idents = c(0,1,2,3,4),downsample = 500), features = gene_ids, raster = F, draw.lines = F,group.colors = c('#88CCEE','#CC6677',  '#999933','#44AA99', '#882255', '#117733', '#332288', '#DDCC77', '#AA4499', '#DDDDDD'),size = 2,angle = 0) + scale_fill_gradientn(colors =  c(rep("black",9),brewer.pal(9,"Blues")[9:1])) + scale_y_discrete(labels = rev(gene_names)) 
+dev.off()
+
+
+####plot virus genes to see if they are DE expressed in plasmodium and amoeba
+
+virus.genes = read.csv("~/Projects/SingleCellGroup/SlimeMold/Amoeba_Data/virus_related_transcripts_Physarum.txt")
+virus.genes = intersect(rownames(Nuc_old),unique(gsub("_","-",as.character(virus.genes[,1]))))
+
+pdf("Nuc_old_anno_feature_VirusMarker.pdf",width=20,height=40)
+FeaturePlot(Nuc_old, reduction = 'umap',pt.size = 1, features = virus.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), min.cutoff = "q10", max.cutoff = "q90")
+dev.off()
+	
+virus.genes = read.csv("~/Projects/SingleCellGroup/SlimeMold/Amoeba_Data/virus_related_transcripts_Physarum.txt")
+virus.genes = intersect(rownames(Nuc_young),unique(gsub("_","-",as.character(virus.genes[,1]))))
+
+pdf("Nuc_young_anno_feature_VirusMarker.pdf",width=20,height=40)
+FeaturePlot(Nuc_young, reduction = 'umap',pt.size = 1, features = virus.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), min.cutoff = "q10", max.cutoff = "q90")
+dev.off()
+	
+
+polx.genes = read.csv("~/Projects/SingleCellGroup/SlimeMold/Amoeba_Data/POLX_transcripts_Physarum.txt")
+polx.genes = intersect(rownames(Nuc_young),unique(gsub("_","-",as.character(polx.genes[,1]))))
+
+pdf("Nuc_young_anno_feature_POLX.pdf",width=15,height=10)
+FeaturePlot(Nuc_young, reduction = 'umap',pt.size = 1, features = polx.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), min.cutoff = "q10", max.cutoff = "q90")
+dev.off()
+	
+
+polx.genes = read.csv("~/Projects/SingleCellGroup/SlimeMold/Amoeba_Data/POLX_transcripts_Physarum.txt")
+polx.genes = intersect(rownames(Nuc_old),unique(gsub("_","-",as.character(polx.genes[,1]))))
+
+pdf("Nuc_old_anno_feature_POLX.pdf",width=15,height=10)
+FeaturePlot(Nuc_old, reduction = 'umap',pt.size = 1, features = polx.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), min.cutoff = "q10", max.cutoff = "q90")
+dev.off()
+	
+
+
+virus.genes = read.csv("~/Projects/SingleCellGroup/SlimeMold/Amoeba_Data/virus_related_transcripts_Physarum.txt")
+virus.genes = intersect(rownames(Nuc_young),unique(gsub("_","-",as.character(virus.genes[,1]))))
+virus.genes = intersect(virus.genes,anno.gene$transcript)
+virus.names = anno.gene$UniProt_Acc[anno.gene$transcript %in% virus.genes]
+  
+gg_Fig <- FeaturePlot(Nuc_young, pt.size = 1, features = virus.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(virus.genes), function(x) { gg_Fig[[x]] + labs(title=virus.names[x]) })
+
+pdf("Nuc_young_VirusMarker.pdf",width=25,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+
+virus.genes = read.csv("~/Projects/SingleCellGroup/SlimeMold/Amoeba_Data/virus_related_transcripts_Physarum.txt")
+virus.genes = intersect(rownames(Amoeba_BSS1.integrated),unique(gsub("_","-",as.character(virus.genes[,1]))))
+virus.genes = intersect(virus.genes,anno.gene$transcript)
+virus.names = anno.gene$UniProt_Acc[anno.gene$transcript %in% virus.genes]
+  
+gg_Fig <- FeaturePlot(Amoeba_BSS1.integrated, pt.size = 2, features = virus.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(virus.genes), function(x) { gg_Fig[[x]] + labs(title=virus.names[x]) })
+
+pdf("Amoeba_BSS1.integrated_VirusMarker.pdf",width=22,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+virus.genes = read.csv("~/Projects/SingleCellGroup/SlimeMold/Amoeba_Data/virus_related_transcripts_Physarum.txt")
+virus.genes = intersect(rownames(Amoeba_all_anno),unique(gsub("_","-",as.character(virus.genes[,1]))))
+virus.genes = intersect(virus.genes,anno.gene$transcript)
+virus.names = anno.gene$UniProt_Acc[anno.gene$transcript %in% virus.genes]
+  
+gg_Fig <- FeaturePlot(Amoeba_all_anno, pt.size = 2, features = virus.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(virus.genes), function(x) { gg_Fig[[x]] + labs(title=virus.names[x]) })
+
+pdf("Amoeba_VirusMarker.pdf",width=22,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+#3 interesting candidates are found --> plot for paper
+
+virus.genes = c("Phypoly-transcript-29968","Phypoly-transcript-19339","Phypoly-transcript-14523")
+virus.names = c("POL3_DROME","RAProtease","DDI1_KLULA")
+
+gg_Fig <- FeaturePlot(Amoeba_BSS1.integrated, pt.size = 3, features = virus.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(virus.genes), function(x) { gg_Fig[[x]] + labs(title=virus.names[x]) })
+
+pdf("Amoeba_BSS1_VirusMarkerPaper.pdf",width=10,height=10)
+CombinePlots( gg_Fig )
+dev.off()
+
+
+Nuc_combined = merge(Nuc_old,Nuc_young)
+Nuc_combined@meta.data$origin = "primary"
+Nuc_combined@meta.data$origin[Nuc_combined@meta.data$orig.ident %in% c("Nuc_old_Net","Nuc_old_Fan")] = "secondary"
+
+gg_Fig <- FeaturePlot(Nuc_old, pt.size = 2, features = virus.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(virus.genes), function(x) { gg_Fig[[x]] + labs(title=virus.names[x]) })
+
+pdf("Nuc_old_VirusMarkerPaper.pdf",width=10,height=10)
+CombinePlots( gg_Fig )
+VlnPlot(Nuc_combined,features = virus.genes, pt.size = -1,group.by = "origin")
+RidgePlot(Nuc_combined,features = virus.genes,group.by = "origin", y.max = 3)
+DotPlot(Nuc_combined,features = virus.genes,group.by = "origin") +scale_colour_gradientn(colors =  c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]))
+dev.off()
+
+gg_Fig <- FeaturePlot(Nuc_young, pt.size = 2, features = virus.genes,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(virus.genes), function(x) { gg_Fig[[x]] + labs(title=virus.names[x]) })
+
+
+pdf("Nuc_young_VirusMarkerPaper.pdf",width=10,height=10)
+CombinePlots( gg_Fig )
+VlnPlot(Nuc_combined,features = virus.genes, pt.size = -1,group.by = "origin")
+RidgePlot(Nuc_combined,features = virus.genes,group.by = "origin", y.max = 3)
+DotPlot(Nuc_combined,features = virus.genes,group.by = "origin") +scale_colour_gradientn(colors =  c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]))
+dev.off()
+
+```
+
+###Compare to sporulation data of Gloeckner and Marwan 2017###
+
+```{r}
+
+setwd("/home/tobias_gerber/Projects/SingleCellGroup/SlimeMold/Nuc_Data/")
+
+library(Seurat)
+library(RColorBrewer)
+library(harmony)
+
+Nuc_old = readRDS(file = "Nuc_old_anno_SeuratObj.RDS")
+
+#only 0-10h
+SporulationUP = read.csv("/home/tobias_gerber/Projects/SingleCellGroup/SlimeMold/Sporulation_UP_0_10_GloecknerMarwan2017.csv", header = T)
+SporulationUP$f1 = gsub("_","-",SporulationUP$f1)
+
+SporulationUP = SporulationUP[SporulationUP$f1 %in% gsub("_","-",anno.gene.id),]
+
+
+#plot some sporulation marker as feature
+
+
+gene_ids = as.character(intersect(SporulationUP[1:30,"f1"],rownames(Nuc_old)))
+gene_names = as.character(SporulationUP[SporulationUP$f1 %in% gene_ids,"UniProt_Acc"])
+
+gg_Fig <- FeaturePlot(Nuc_old, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_old_anno_feature_SporulationUP010Marker.pdf",width=25,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+	
+#no obvious enrichment in any cluster
+
+#calculate score to cover more genes
+
+genes_UP = intersect(rownames(Nuc_old),SporulationUP$f1[SporulationUP$Log2_FoldChange > 5])
+
+data_UP = FetchData(Nuc_old,c("seurat_clusters",genes_UP))
+data_UP$Score = rowSums(data_UP[,2:ncol(data_UP)])
+
+genes_DOWN = intersect(rownames(Nuc_old),SporulationUP$f1[SporulationUP$Log2_FoldChange < -5])
+
+data_DOWN = FetchData(Nuc_old,c("seurat_clusters",genes_DOWN))
+data_DOWN$Score = rowSums(data_DOWN[,2:ncol(data_DOWN)])
+
+Nuc_old@meta.data$ScoreUP = data_UP$Score
+Nuc_old@meta.data$ScoreDOWN = data_DOWN$Score
+
+pdf("Nuc_old_anno_feature_SporulationScore_GT5.pdf",width=10,height=5)
+FeaturePlot(Nuc_old, reduction = 'umap',pt.size = 1, features = c("ScoreUP","ScoreDOWN"),order = T, cols = c(rev(brewer.pal(11,"RdYlBu")[1:11])))
+dev.off()
+
+
+#########repeat with complete list
+
+
+#across all comparisons
+SporulationUP = read.csv("/home/tobias_gerber/Projects/SingleCellGroup/SlimeMold/Sporulation_UP_All_GloecknerMarwan2017.csv", header = T)
+SporulationUP$f1 = gsub("_","-",SporulationUP$f1)
+
+SporulationUP = SporulationUP[SporulationUP$f1 %in% gsub("_","-",anno.gene.id),]
+
+
+#plot some sporulation marker as feature
+
+
+gene_ids = as.character(intersect(SporulationUP[1:30,"f1"],rownames(Nuc_old)))
+gene_names = as.character(SporulationUP[SporulationUP$f1 %in% gene_ids,"UniProt_Acc"])
+
+gg_Fig <- FeaturePlot(Nuc_old, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_old_anno_feature_SporulationUPAllMarker.pdf",width=25,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+	
+#no obvious enrichment in any cluster
+
+#calculate score to cover more genes
+
+genes_UP = intersect(rownames(Nuc_old),SporulationUP$f1[SporulationUP$Log2_FoldChange > 3])
+
+data_UP = FetchData(Nuc_old,c("seurat_clusters",genes_UP))
+data_UP$Score = rowSums(data_UP[,2:ncol(data_UP)])
+
+genes_DOWN = intersect(rownames(Nuc_old),SporulationUP$f1[SporulationUP$Log2_FoldChange < -3])
+
+data_DOWN = FetchData(Nuc_old,c("seurat_clusters",genes_DOWN))
+data_DOWN$Score = rowSums(data_DOWN[,2:ncol(data_DOWN)])
+
+Nuc_old@meta.data$ScoreUP = data_UP$Score
+Nuc_old@meta.data$ScoreDOWN = data_DOWN$Score
+
+pdf("Nuc_old_anno_feature_SporulationUPAllScore_GT3.pdf",width=10,height=5)
+FeaturePlot(Nuc_old, reduction = 'umap',pt.size = 1, features = c("ScoreUP","ScoreDOWN"),order = T, cols = c(rev(brewer.pal(11,"RdYlBu")[1:11])))
+dev.off()
+
+saveRDS(Nuc_old,file = "Nuc_old_anno_SeuratObj.RDS")
+
+tmp = subset(Nuc_old, idents = 4)
+pdf("Scale.pdf",width=10,height=5)
+FeaturePlot(tmp, reduction = 'umap',pt.size = 1, features = c("ScoreUP","ScoreDOWN"),order = T, cols = c(rev(brewer.pal(11,"RdYlBu")[1:11])))
+dev.off()
+
+
+```
+
+
+
+
+##young
+
+
+```{r}
+
+Nuc_young = merge(Nuc_young_A, Nuc_young_B, add.cell.ids = c("Nuc_young_A", "Nuc_young_B"), project = "Nuc_young")
+
+#parallize scaling
+library(future)
+plan("multiprocess", workers = 8)
+plan()
+
+#set maximum to 50GB for each worker
+options(future.globals.maxSize = 50000 * 1024^2)
+
+#normalize data
+
+Nuc_young = NormalizeData(Nuc_young)
+
+#plot1 <- FeatureScatter(Nuc_all_anno, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Nuc_young, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+pdf("./Nuc_young_anno_QC_PreFilter.pdf",width=10,height=5)
+VlnPlot(Nuc_young, features = c("nCount_RNA","nFeature_RNA"),pt.size = -1)
+plot2
+dev.off()
+
+Nuc_young <- subset(Nuc_young, subset = nCount_RNA < 3000  )
+
+#plot1 <- FeatureScatter(Nuc_all_anno, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Nuc_young, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+pdf("./Nuc_all_anno_QC_PostFilter.pdf",width=10,height=5)
+VlnPlot(Nuc_young, features = c("nCount_RNA","nFeature_RNA"),pt.size = -1)
+plot2
+dev.off()
+
+
+#get cell cycle genes
+
+#g2m.genes <- cc.genes$g2m.genes
+#g2m.contig <- intersect(rownames(anno)[anno$V2 %in% g2m.genes ] , rownames(Nuc_all_anno) )
+
+#s.genes <- cc.genes$s.genes
+#s.contig <- intersect(rownames(anno)[anno$V2 %in% s.genes ] , rownames(Nuc_all_anno) )
+
+#cell cycle scoring
+#Nuc_all_anno <- CellCycleScoring(Nuc_all_anno, s.features = s.contig, g2m.features = g2m.contig, set.ident = TRUE)
+
+
+#scale
+#ScaleData(  object,  features = NULL,  assay = NULL,  vars.to.regress = NULL,  split.by = NULL,  model.use = "linear",  use.umi = FALSE,  do.scale = TRUE,  do.center = TRUE,  scale.max = 10,  block.size = 1000,  min.cells.to.block = 3000,  verbose = TRUE)
+
+all.genes <- rownames(Nuc_young)
+
+Nuc_young = ScaleData(  Nuc_young, features = all.genes ,vars.to.regress = c("nCount_RNA","nFeature_RNA"))
+
+#run PCA on all genes
+#RunPCA(object, assay = NULL, features = NULL,  npcs = 50, rev.pca = FALSE, weight.by.var = TRUE, verbose = TRUE,  ndims.print = 1:5, nfeatures.print = 30, reduction.name = "pca",  reduction.key = "PC_", seed.use = 42)
+
+Nuc_young = RunPCA(Nuc_young,features = all.genes,npcs = 100)
+
+#plot PCA heatmaps
+#DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+library(RColorBrewer)
+
+pdf("Nuc_young_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Nuc_young, dims = 1:16, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_young, dims = 17:32, cells = 1000, balanced = TRUE, ncol = 4,  fast = F) 
+DimHeatmap(Nuc_young, dims = 33:48, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_young, dims = 49:64, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_young, dims = 65:80, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+DimHeatmap(Nuc_young, dims = 81:96, cells = 1000, balanced = TRUE,  ncol = 4, fast = F) 
+dev.off()
+
+#elbow plot
+pdf("Nuc_young_PCelbow.pdf",width=20,height=10)
+ElbowPlot(Nuc_young, ndims = 100)
+dev.off()
+
+#Cluster cells
+Nuc_young<- FindNeighbors(Nuc_young, dims = 1:15)
+Nuc_young <- FindClusters(Nuc_young, resolution = 0.3)
+
+#run UMAP
+#min.dist deafult is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_young = RunUMAP(Nuc_young,dims = 1:15, min.dist = 0.001)
+
+#run tSNE
+Nuc_young = RunTSNE(Nuc_young,dims = 1:15)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_young_Embedding_PC15_res0.3.pdf",width=10,height=10)
+DimPlot(object = Nuc_young, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_young, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_young, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_young, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_young_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_young, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_young, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+
+#one cluster is driven by low nUMI --> remove
+
+Nuc_young = subset(Nuc_young, idents = c(0,1,2))
+
+
+#Cluster cells
+Nuc_young<- FindNeighbors(Nuc_young, dims = 1:7)
+Nuc_young <- FindClusters(Nuc_young, resolution = 0.4)
+
+#run UMAP
+#min.dist default is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_young = RunUMAP(Nuc_young,dims = 1:7, min.dist = 0.1)
+
+#run tSNE
+Nuc_young = RunTSNE(Nuc_young,dims = 1:7)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_young_Embedding_PC7_res0.2.pdf",width=10,height=10)
+DimPlot(object = Nuc_young, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_young, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_young, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_young, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_young_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_young, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_young, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+#one cluster is still driven by low nUMI --> remove
+
+Nuc_young = subset(Nuc_young, idents = c(0,2,3))
+
+#Cluster cells
+Nuc_young<- FindNeighbors(Nuc_young, dims = 1:7)
+Nuc_young <- FindClusters(Nuc_young, resolution = 0.4)
+
+#run UMAP
+#min.dist default is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_young = RunUMAP(Nuc_young,dims = 1:7, min.dist = 0.1)
+
+#run tSNE
+Nuc_young = RunTSNE(Nuc_young,dims = 1:7)
+
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_young_Embedding_PC7_res0.4.pdf",width=10,height=10)
+DimPlot(object = Nuc_young, reduction = 'umap', pt.size = 2)
+DimPlot(object = Nuc_young, reduction = 'umap', pt.size = 2,group.by = "orig.ident")
+DimPlot(object = Nuc_young, reduction = 'tsne', pt.size = 2)
+DimPlot(object = Nuc_young, reduction = 'tsne', pt.size = 2,group.by = "orig.ident")
+dev.off()
+
+#some QC features
+
+pdf("Nuc_young_feature_QC.pdf",width=10,height=5)
+FeaturePlot(Nuc_young, reduction = 'umap', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+FeaturePlot(Nuc_young, reduction = 'tsne', pt.size = 0.5, features = c("nFeature_RNA","nCount_RNA"),order = T, cols = brewer.pal(9,"Greys")[3:9])
+dev.off()
+
+plan("multiprocess", workers = 8)
+library(tidyverse)
+
+markers <- FindAllMarkers(Nuc_young, only.pos = TRUE,  logfc.threshold = 0.2)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno.gene, by.x="gene" , by.y="transcript")
+markers.anno$ID = markers.anno$gene
+
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,("Nuc_young_allMarker.csv"))
+
+
+saveRDS(Nuc_young, file = "Nuc_young_anno_SeuratObj.RDS")
+
+
+########## plotting features
+
+
+
+
+#randomize plot order
+
+plot.df = FetchData(Nuc_young, c("UMAP_1","UMAP_2","ident","orig.ident"))
+plot.df$order = sample(1:nrow(plot.df),nrow(plot.df))
+plot.df = plot.df[order(plot.df$order),]
+
+pdf("Nuc_young_anno_paper.pdf",width=10,height=10)
+
+ggplot(plot.df, aes(UMAP_1,UMAP_2, color=ident))  + geom_point( size=2 ) + scale_color_manual(values = c('#88CCEE', '#44AA99', '#999933','#CC6677', '#882255', '#117733', '#332288', '#DDCC77', '#AA4499', '#DDDDDD')) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+ggplot(plot.df, aes(UMAP_1,UMAP_2, color=orig.ident))  + geom_point( size=2 ) + scale_color_manual(values = c( "gray30", "gray70")) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+dev.off()
+
+
+gene_names = c("UBE2C_DICDI",
+"PIF1_HUMAN",
+"AMT1_DICDI",
+"Y5393_ARATH",
+"KRP95_STRPU",
+"DDX60_HUMAN",
+"RIP3_DICDI",
+"MYOF_XENTR",
+"ACAD8_DICDI",
+"MOAC_XANAC",
+"RFFL_HUMAN",
+"PTP2_DICDI",
+"GRLE_DICDI",
+"ADH3_EMENI",
+"PAKC_DICDI",
+"SPO14_YEAST",
+"PGK_CHICK",
+"GEFM_DICDI",
+"ENG2_SCHPO",
+"PHS1_DICDI",
+"MASY_MYXXD",
+"SPO14_YEAST",
+"FAT2_SCHPO",
+"GUAA_DICDI",
+"DIMB_DICDI",
+"Y8969_DICDI",
+"RACH_DICDI",
+"SCFD1_DICDI",
+"PICP_PSESR",
+"ABCG2_DICDI",
+"MFSD8_DANRE",
+"MGP2_DICDI",
+"TRI72_RABIT",
+"KCND1_HUMAN",
+"YGI2_SCHPO",
+"DYH1_RAT",
+"LAMA_DROME",
+"T2FA_DICDI",
+"AGO9_ARATH",
+"FBLN4_CRIGR")
+
+gene_ids = c("Phypoly-transcript-20628",
+"Phypoly-transcript-23076",
+"Phypoly-transcript-07103",
+"Phypoly-transcript-07601",
+"Phypoly-transcript-01362",
+"Phypoly-transcript-01424",
+"Phypoly-transcript-02566",
+"Phypoly-transcript-00593",
+"Phypoly-transcript-07445",
+"Phypoly-transcript-30521",
+"Phypoly-transcript-04124",
+"Phypoly-transcript-06659",
+"Phypoly-transcript-00819",
+"Phypoly-transcript-07168",
+"Phypoly-transcript-04940",
+"Phypoly-transcript-02531",
+"Phypoly-transcript-08774",
+"Phypoly-transcript-02618",
+"Phypoly-transcript-02507",
+"Phypoly-transcript-02090",
+"Phypoly-transcript-01286",
+"Phypoly-transcript-02390",
+"Phypoly-transcript-00199",
+"Phypoly-transcript-04561",
+"Phypoly-transcript-07397",
+"Phypoly-transcript-04372",
+"Phypoly-transcript-16297",
+"Phypoly-transcript-02333",
+"Phypoly-transcript-08942",
+"Phypoly-transcript-00883",
+"Phypoly-transcript-04492",
+"Phypoly-transcript-00482",
+"Phypoly-transcript-15910",
+"Phypoly-transcript-04246",
+"Phypoly-transcript-11167",
+"Phypoly-transcript-26083",
+"Phypoly-transcript-00008",
+"Phypoly-transcript-05487",
+"Phypoly-transcript-01719",
+"Phypoly-transcript-01314")
+
+
+gg_Fig <- FeaturePlot(Nuc_young, pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Nuc_young_anno_feature_ClustMarker.pdf",width=35,height=30)
+CombinePlots( gg_Fig )
+dev.off()
+		
+#ClustMarker as heatmap
+gene_names = c("FAT2_SCHPO",
+"Y5521_DROME",
+"RBP9X_DROME",
+"ATC1_DICDI",
+"VILI_CHICK",
+"GUAA_DICDI",
+"PDXH_MICAN",
+"DUSPR_DICDI",
+"THY1_DICDI",
+"SECG_DICDI",
+"KI67_HUMAN",
+"DPOLA_XENLA",
+"DEK_MOUSE",
+"MCL1_SCHPO",	
+"SMC4_DICDI",
+"CDC20_DICDI",
+"TTC27_DICDI",
+"RHP9_SCHPO",
+"KIF15_RAT",
+"KIF22_DANRE")
+gene_ids = c("Phypoly-transcript-00199",
+"Phypoly-transcript-00275",
+"Phypoly-transcript-00612",
+"Phypoly-transcript-01228",
+"Phypoly-transcript-00343",
+"Phypoly-transcript-04561",
+"Phypoly-transcript-13021",
+"Phypoly-transcript-07442",
+"Phypoly-transcript-13030",
+"Phypoly-transcript-13167",
+"Phypoly-transcript-00261",
+"Phypoly-transcript-00494",
+"Phypoly-transcript-06998",
+"Phypoly-transcript-01379",
+"Phypoly-transcript-00921",
+"Phypoly-transcript-17752",
+"Phypoly-transcript-00214",
+"Phypoly-transcript-02655",
+"Phypoly-transcript-00408",
+"Phypoly-transcript-03486")
+
+#on heatmap
+my_levels <- c(0,3,1,2)
+levels(Nuc_young) <- my_levels
+
+pdf("Nuc_young_Heatmap_feature_TopClustMarker.pdf.pdf",width=5,height=5)
+DoHeatmap(Nuc_young, features = gene_ids, raster = F, draw.lines = F,group.colors = c('#88CCEE', '#CC6677','#44AA99', '#999933', '#882255', '#117733', '#332288', '#DDCC77', '#AA4499', '#DDDDDD'),size = 2,angle = 0) + scale_fill_gradientn(colors =  c(rep("black",9),brewer.pal(9,"Blues")[9:1])) + scale_y_discrete(labels = rev(gene_names)) 
+dev.off()
+
+
+
+
+
+#cluster 0 marker
+gene_names = c("FAT2_SCHPO","Y5521_DROME","RBP9X_DROME","GUAA_DICDI","ATC1_DICDI","VILI_CHICK")		
+
+gene_ids = c("Phypoly-transcript-00199","Phypoly-transcript-00275","Phypoly-transcript-00612","Phypoly-transcript-04561","Phypoly-transcript-01228","Phypoly-transcript-00343")
+
+gg_Fig <- FeaturePlot(Nuc_young, pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x]) })
+
+pdf("Nuc_young_anno_feature_Cluster0Marker.pdf",width=10,height=6)
+CombinePlots( gg_Fig )
+dev.off()
+	
+#Selected marker
+
+gene_names = c("MYOD_DICDI",
+"MYOM_DICDI",
+"MYOJ_DICDI",
+"MYOC_DICDI",
+"MYO9A_HUMAN",
+"MYS2_DICDI",
+"MYOH_DICDI",
+"MYOF_HUMAN",
+"MYOE_DICDI",
+"MYOI_DICDI",
+"ACTNA_DICDI",
+"ACTNA_DICDI",
+"ACTN3_MOUSE",
+"ACT6_DIPDE",
+"ACTN4_CHICK",
+"ACTA_PHYPO",
+"ACL6B_HUMAN",
+"ACTP_ACACA",
+"RB11C_DICDI",
+"CYP3_CAEEL",
+"V246_FOWPN")
+
+gene_ids = c("Phypoly-transcript-21403",
+"Phypoly-transcript-01397",
+"Phypoly-transcript-04150",
+"Phypoly-transcript-00804",
+"Phypoly-transcript-29127",
+"Phypoly-transcript-12130",
+"Phypoly-transcript-00390",
+"Phypoly-transcript-00462",
+"Phypoly-transcript-01523",
+"Phypoly-transcript-00070",
+"Phypoly-transcript-00905",
+"Phypoly-transcript-02032",
+"Phypoly-transcript-02172",
+"Phypoly-transcript-02606",
+"Phypoly-transcript-04140",
+"Phypoly-transcript-10401",
+"Phypoly-transcript-10433",
+"Phypoly-transcript-20142",
+"Phypoly-transcript-29889",
+"Phypoly-transcript-20830",
+"Phypoly-transcript-20059")
+
+gg_Fig <- FeaturePlot(Nuc_young, reduction = 'umap', pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_anno_feature_SelectedMarker.pdf",width=22,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+gene_names = c("SCP1_ASTLP",
+"SYYC_CHICK",
+"RHP26_SCHPO",
+"ADH6_YEAST",
+"ELAV2_XENTR",
+"CPAS1_DICDI",
+"NPHP3_MOUSE",
+"RS30_PLAF7",
+"YFMJ_BACSU",
+"RACH_DICDI",
+"MFSD8_DANRE",
+"PASDomain",
+"YVDB_BACSU",
+"MFS10_BOVIN",
+"ASNS_SCHPO",
+"SPXS4_DICDI")
+
+gene_ids = c("Phypoly-transcript-17763",
+"Phypoly-transcript-05209",
+"Phypoly-transcript-00778",
+"Phypoly-transcript-15025",
+"Phypoly-transcript-13086",
+"Phypoly-transcript-17606",
+"Phypoly-transcript-04537",
+"Phypoly-transcript-21996",
+"Phypoly-transcript-22446",
+"Phypoly-transcript-16297",
+"Phypoly-transcript-04492",
+"Phypoly-transcript-26096",
+"Phypoly-transcript-04627",
+"Phypoly-transcript-09824",
+"Phypoly-transcript-05971",
+"Phypoly-transcript-02158")
+
+gg_Fig <- FeaturePlot(Nuc_young, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_anno_feature_BSS4Marker.pdf",width=25,height=20)
+CombinePlots( gg_Fig )
+dev.off()
+	
+#plot amoeba specific cycling marker
+
+gene_names = c("DUT_SOLLC",
+"CCNB_DICDI",
+"KITH_DICDI",
+"LBR_HUMAN",
+"MSL2_DROME",
+"CAP_DICDI",
+"YB4E_SCHPO",
+"CALM_SCHPO")
+
+gene_ids = c("Phypoly-transcript-08256",
+"Phypoly-transcript-17230",
+"Phypoly-transcript-09169",
+"Phypoly-transcript-08526",
+"Phypoly-transcript-19588",
+"Phypoly-transcript-08659",
+"Phypoly-transcript-04224",
+"Phypoly-transcript-06690")
+
+
+gg_Fig <- FeaturePlot(Nuc_young, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_anno_feature_AmoebaCycleMarker.pdf",width=15,height=12)
+CombinePlots( gg_Fig )
+dev.off()
+	
+#Late Cycle Marker
+gene_names = c("TF29_SCHPO","NEG1_NEUCR","IPLA_DICDI","MUS81_XENTR","SMHD1_HUMAN","ANK1_HUMAN","ROCO6_DICDI","PATS1_DICDI","FBN1_BOVIN","AQP2_HORSE","MCM9_XENTR","PMA1_DICDI","TALA1_DICDI","NOTCH_DROME","PHC2_DANRE","LBR_HUMAN","CAP_DICDI","MCM9_XENTR")
+
+gene_ids = c("Phypoly-transcript-09973","Phypoly-transcript-10029","Phypoly-transcript-00996","Phypoly-transcript-00664","Phypoly-transcript-13710","Phypoly-transcript-00953","Phypoly-transcript-06536","Phypoly-transcript-02110","Phypoly-transcript-00834","Phypoly-transcript-01487","Phypoly-transcript-00963","Phypoly-transcript-01492","Phypoly-transcript-03235","Phypoly-transcript-00580","Phypoly-transcript-15399","Phypoly-transcript-09169","Phypoly-transcript-07637","Phypoly-transcript-00963")
+			
+
+
+gg_Fig <- FeaturePlot(Nuc_young, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_anno_feature_AmoebaCycleMarker.pdf",width=18,height=12)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+
+gene_names = c("TOP2_DICDI",		
+"KI67_HUMAN",
+"CDC20_DICDI",
+"DPOLA_XENLA",
+"CDC45_DICDI",	
+"MCM4_ARATH",
+"MCM7_ARATH",
+"BUB1_ARATH",
+"RACH_DICDI",
+"NOTCH_DROME",
+"CDC20_DICDI",
+"TBAN_PHYPO",
+"TBB2_PHYPO",
+"PAP1A_DICDI",
+"DYR_HAEIN",
+"RNPB_PHYPO",
+"NIP7_TETNG")
+			
+gene_ids = c("Phypoly-transcript-00381",
+"Phypoly-transcript-00261",
+"Phypoly-transcript-07151",
+"Phypoly-transcript-00494",
+"Phypoly-transcript-06023",
+"Phypoly-transcript-03575",
+"Phypoly-transcript-03498",
+"Phypoly-transcript-00614",
+"Phypoly-transcript-16297",
+"Phypoly-transcript-00580",
+"Phypoly-transcript-17752",
+"Phypoly-transcript-07720",
+"Phypoly-transcript-06678",
+"Phypoly-transcript-05115",
+"Phypoly-transcript-15374",
+"Phypoly-transcript-19916",
+"Phypoly-transcript-20328")
+	
+
+
+gg_Fig <- FeaturePlot(Nuc_young, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_anno_feature_CycleMarker.pdf",width=18,height=14)
+CombinePlots( gg_Fig )
+dev.off()
+	
+pdf("Nuc_young_anno_feature_CycleMarker_blend.pdf",width=15,height=4)
+FeaturePlot(object = Nuc_young, features = c("Phypoly-transcript-00381", "Phypoly-transcript-03575"),order =T, reduction = 'umap', pt.size = 1, blend = T,min.cutoff = "q10", max.cutoff = "q90")
+dev.off()
+
+#plot as function of UMAP1
+		
+
+
+plot.df = FetchData(Nuc_young, c("UMAP_1","ident","Phypoly-transcript-00381",
+"Phypoly-transcript-00261",
+"Phypoly-transcript-07151",
+"Phypoly-transcript-00494",
+"Phypoly-transcript-06023",
+"Phypoly-transcript-03575",
+"Phypoly-transcript-03498",
+"Phypoly-transcript-00614",
+"Phypoly-transcript-16297",
+"Phypoly-transcript-00580",
+"Phypoly-transcript-17752"))
+
+plot.df = plot.df[!plot.df$ident %in% 3,]
+
+plot_list=list()
+count = 0
+for (i in colnames(plot.df[,gene_ids])) {
+  count = count + 1
+  plot_list[[i]]=ggplot(plot.df, aes(UMAP_1,plot.df[,i])) + geom_smooth(se = FALSE, method='loess',span = 1 ) + scale_color_manual(values = c('#88CCEE', '#44AA99', '#117733', '#332288', '#DDCC77', '#999933','#CC6677', '#882255', '#AA4499', '#DDDDDD')) + theme_bw() + theme(panel.border =  element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + labs(title=gene_names[count])
+
+}
+
+pdf("./Nuc_young_anno_CycleExpressionUMAP1.pdf",width=4.5,height=4)
+
+for (i in colnames(plot.df[,gene_ids])) {
+    print(plot_list[[i]])
+}
+dev.off()
+
+
+
+#########extract cycling nuclei to check for separation of S and G2M and spindle
+
+Nuc_young_cc = subset(Nuc_young, idents = c(1,2))
+
+markers.anno = read.csv("Nuc_young_allMarker.csv",header = T)
+#run PCA with cluster markers
+
+Nuc_young_cc = RunPCA(Nuc_young_cc,features = markers.anno$ID[markers.anno$cluster %in% c(1,2)],npcs = 20)
+
+pdf("Nuc_young_cc_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Nuc_young_cc, dims = 1:10,  balanced = TRUE, ncol = 4,  fast = F) 
+dev.off()
+
+
+
+#Cluster cells
+Nuc_young_cc<- FindNeighbors(Nuc_young_cc, dims = 1:5)
+Nuc_young_cc <- FindClusters(Nuc_young_cc, resolution = 0.5)
+
+#run UMAP
+#min.dist default is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_young_cc = RunUMAP(Nuc_young_cc,dims = 1:5, min.dist = 0.3)
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_young_cc_Embedding_PC5_res0.5.pdf",width=10,height=10)
+DimPlot(object = Nuc_young_cc, reduction = 'umap', pt.size = 3)
+DimPlot(object = Nuc_young_cc, reduction = 'umap', pt.size = 3,group.by = "orig.ident")
+FeaturePlot(Nuc_young_cc, reduction = 'umap',pt.size = 1, features = c("nFeature_RNA","nCount_RNA","Phypoly-transcript-00381","Phypoly-transcript-00261"),order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]))
+dev.off()
+
+
+gene_names = c("TOP2_DICDI",		
+"KI67_HUMAN",
+"CDC20_DICDI",
+"DPOLA_XENLA",
+"CDC45_DICDI",	
+"MCM4_ARATH",
+"MCM7_ARATH",
+"BUB1_ARATH",
+"RACH_DICDI",
+"NOTCH_DROME",
+"CDC20_DICDI",
+"TBAN_PHYPO",
+"TBB2_PHYPO")
+			
+gene_ids = c("Phypoly-transcript-00381",
+"Phypoly-transcript-00261",
+"Phypoly-transcript-07151",
+"Phypoly-transcript-00494",
+"Phypoly-transcript-06023",
+"Phypoly-transcript-03575",
+"Phypoly-transcript-03498",
+"Phypoly-transcript-00614",
+"Phypoly-transcript-16297",
+"Phypoly-transcript-00580",
+"Phypoly-transcript-17752",
+"Phypoly-transcript-07720",
+"Phypoly-transcript-06678")
+	
+
+gg_Fig <- FeaturePlot(Nuc_young_cc, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_cc_anno_feature_CycleMarker.pdf",width=15,height=12)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+gene_names = c("DUT_SOLLC",
+"CCNB_DICDI",
+"KITH_DICDI",
+"LBR_HUMAN",
+"MSL2_DROME",
+"CAP_DICDI",
+"YB4E_SCHPO",
+"CALM_SCHPO")
+
+gene_ids = c("Phypoly-transcript-08256",
+"Phypoly-transcript-17230",
+"Phypoly-transcript-09169",
+"Phypoly-transcript-08526",
+"Phypoly-transcript-19588",
+"Phypoly-transcript-08659",
+"Phypoly-transcript-04224",
+"Phypoly-transcript-06690")
+
+
+gg_Fig <- FeaturePlot(Nuc_young_cc, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_cc_anno_feature_AmoebaCycleMarker.pdf",width=15,height=12)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+
+gene_names = c(
+"TOP2_DICDI",
+"KI67_HUMAN",
+"DPOLN_MOUSE",
+"DNLI_HAEIN",
+"TOLB_PSEA6",
+"WDR54_MOUSE",
+"ACTN4_RAT",
+"CDC20_DICDI",
+"DPOLB_RAT",
+"RHOQ_HUMAN",
+"FORD_DICDI",
+"RASA2_MOUSE",
+"CDKA1_ORYSJ",
+"CCA11_ORYSJ",
+"CCNB_DICDI",
+"TBB2_PHYPO",
+"MCM9_XENTR",
+"PATS1_DICDI")
+gene_ids = c(
+"Phypoly-transcript-00381",
+"Phypoly-transcript-00261",
+"Phypoly-transcript-01132",
+"Phypoly-transcript-14390",
+"Phypoly-transcript-04660",
+"Phypoly-transcript-13888",
+"Phypoly-transcript-00407",
+"Phypoly-transcript-07151",
+"Phypoly-transcript-04465",
+"Phypoly-transcript-23095",
+"Phypoly-transcript-02192",
+"Phypoly-transcript-06376",
+"Phypoly-transcript-06666",
+"Phypoly-transcript-05693",
+"Phypoly-transcript-08256",
+"Phypoly-transcript-06678",
+"Phypoly-transcript-00963",
+"Phypoly-transcript-00502")
+		
+
+gg_Fig <- FeaturePlot(Nuc_young_cc, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T, min.cutoff = "q10", max.cutoff = "q90")
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_cc_anno_feature_BSS1Marker.pdf",width=15,height=12)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+markers <- FindAllMarkers(Nuc_young_cc, only.pos = TRUE,  logfc.threshold = 0.2)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno.gene, by.x="gene" , by.y="transcript")
+markers.anno$ID = markers.anno$gene
+
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,("Nuc_young_cc_allMarker.csv"))
+
+
+saveRDS(Nuc_young_cc, file = "Nuc_young_cc_anno_SeuratObj.RDS")
+
+
+#####cluster cycling nuclei with BSS1 markers
+
+markers.BSS1 = read.csv("/home/tobias_gerber/Projects/SingleCellGroup/SlimeMold/SpatialTranscriptomics/BSS1_Grid_allMarker.csv")
+
+
+all.genes <- rownames(Nuc_young_cc)
+
+Nuc_young_cc = ScaleData(  Nuc_young_cc, features = all.genes ,vars.to.regress = c("nCount_RNA","nFeature_RNA"))
+
+#run PCA with BSS1 markers
+
+Nuc_young_cc = RunPCA(Nuc_young_cc,features = markers.BSS1$gene[markers.BSS1$diff > 0.1],npcs = 20)
+
+pdf("Nuc_young_cc_BSS1PCA_PCAheatmaps.pdf",width=30,height=20)
+DimHeatmap(Nuc_young_cc, dims = 1:10,  balanced = TRUE, ncol = 4,  fast = F) 
+dev.off()
+
+#Cluster cells
+Nuc_young_cc<- FindNeighbors(Nuc_young_cc, dims = 1:4)
+Nuc_young_cc <- FindClusters(Nuc_young_cc, resolution = 0.5)
+
+#run UMAP
+#min.dist default is 0.3. Can go down to 0.001. Play around to modify clustering
+Nuc_young_cc = RunUMAP(Nuc_young_cc,dims = 1:4, min.dist = 0.03,seed.use = 200)
+
+#plot result
+#DimPlot(object, dims = c(1, 2), cells = NULL, cols = NULL,  pt.size = NULL, reduction = NULL, group.by = NULL,  split.by = NULL, shape.by = NULL, order = NULL, label = FALSE,  label.size = 4, repel = FALSE, cells.highlight = NULL,  cols.highlight = "red", sizes.highlight = 1, na.value = "grey50",  combine = TRUE)
+
+pdf("Nuc_young_cc_BSS1PCA_Embedding_PC4_res0.5.pdf",width=10,height=10)
+DimPlot(object = Nuc_young_cc, reduction = 'umap', pt.size = 3)
+DimPlot(object = Nuc_young_cc, reduction = 'umap', pt.size = 3,group.by = "orig.ident")
+DimPlot(object = Nuc_young_cc, reduction = 'pca', pt.size = 3)
+FeaturePlot(Nuc_young_cc, reduction = 'umap',pt.size = 1, features = c("nFeature_RNA","nCount_RNA","Phypoly-transcript-00381","Phypoly-transcript-00261"),order = T, cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]))
+dev.off()
+
+
+gene_names = c("DUT_SOLLC",
+"CCNB_DICDI",
+"CDK1_DICDI",
+"AURAA_XENLA",
+"TOP2_DICDI",
+"KI67_HUMAN",
+"DPOLN_MOUSE",
+"DNLI_HAEIN",
+"TOLB_PSEA6",
+"WDR54_MOUSE",
+"ACTN4_RAT",
+"CDC20_DICDI",
+"DPOLB_RAT",
+"RHOQ_HUMAN",
+"FORD_DICDI",
+"RASA2_MOUSE",
+"CDKA1_ORYSJ",
+"CCA11_ORYSJ",
+"CCNB_DICDI",
+"TBB2_PHYPO",
+"MCM9_XENTR",
+"PATS1_DICDI")
+gene_ids = c("Phypoly-transcript-20038",
+"Phypoly-transcript-08256",
+"Phypoly-transcript-11405",
+"Phypoly-transcript-07863",
+"Phypoly-transcript-00381",
+"Phypoly-transcript-00261",
+"Phypoly-transcript-01132",
+"Phypoly-transcript-14390",
+"Phypoly-transcript-04660",
+"Phypoly-transcript-13888",
+"Phypoly-transcript-00407",
+"Phypoly-transcript-07151",
+"Phypoly-transcript-04465",
+"Phypoly-transcript-23095",
+"Phypoly-transcript-02192",
+"Phypoly-transcript-06376",
+"Phypoly-transcript-06666",
+"Phypoly-transcript-05693",
+"Phypoly-transcript-08256",
+"Phypoly-transcript-06678",
+"Phypoly-transcript-00963",
+"Phypoly-transcript-00502")
+		
+
+gg_Fig <- FeaturePlot(Nuc_young_cc, reduction = 'umap',pt.size = 1, features = gene_ids,order = T, min.cutoff = "q10", max.cutoff = "q90", cols = c(brewer.pal(9,"Greys")[3],brewer.pal(9,"Blues")[3:9]), repel=T)
+gg_Fig <- lapply( 1:length(gene_ids), function(x) { gg_Fig[[x]] + labs(title=gene_names[x])  })
+
+pdf("Nuc_young_cc_BSS1PCA_feature_BSS1Marker.pdf",width=15,height=12)
+CombinePlots( gg_Fig )
+dev.off()
+	
+
+markers <- FindAllMarkers(Nuc_young_cc, only.pos = TRUE,  logfc.threshold = 0.2)
+markers.anno = markers
+markers.anno = merge(markers.anno,anno.gene, by.x="gene" , by.y="transcript")
+markers.anno$ID = markers.anno$gene
+
+markers.anno = markers.anno  %>% arrange(cluster , desc(avg_logFC))
+
+write.csv(markers.anno,("Nuc_young_cc_BSS1PCA_allMarker.csv"))
+
+
+saveRDS(Nuc_young_cc, file = "Nuc_young_cc_BSS1PCA_SeuratObj.RDS")
+
+
+#######get diffusion time
+
+library("destiny")
+
+diff.df = as.data.frame(Embeddings(Nuc_young_cc, "pca" ),stringsAsFactor = F)
+diff.df$pt = 0
+diff.df$rank = 0
+diff.df = cbind(diff.df,as.data.frame(Embeddings(Nuc_young_cc, "umap" ),stringsAsFactor = F))
+diff.df$cluster = Nuc_young_cc@active.ident
+
+DatasetDM <- DiffusionMap(diff.df[diff.df$cluster %in% 4,1:4])
+dpt_c4 = DPT(DatasetDM)
+DatasetDM <- DiffusionMap(diff.df[diff.df$cluster %in% c(0,2,3),1:4])
+dpt_c0 = DPT(DatasetDM)
+DatasetDM <- DiffusionMap(diff.df[diff.df$cluster %in% 1,1:4])
+dpt_c1 = DPT(DatasetDM)
+
+pseudotime_BSS_c4 = (dpt_c4[random_root(dpt_c4), ])
+pseudotime_BSS_c0 = dpt_c0[random_root(dpt_c0), ] + max(pseudotime_BSS_c4)
+pseudotime_BSS_c1 = dpt_c1[random_root(dpt_c1), ] + max(pseudotime_BSS_c0) 
+
+
+diff.df$pt[diff.df$cluster %in% 4] = pseudotime_BSS_c4
+diff.df$pt[diff.df$cluster %in% c(0,2,3)] = (pseudotime_BSS_c0)
+diff.df$pt[diff.df$cluster %in% 1] = pseudotime_BSS_c1
+
+#DatasetDM <- DiffusionMap(diff.df[diff.df$Spatial_1 > 10,1:5])
+#dpt_g2 = DPT(DatasetDM)
+#DatasetDM <- DiffusionMap(diff.df[diff.df$Spatial_1 < 11,1:5])
+#dpt_g1 = DPT(DatasetDM)
+
+#pseudotime_BSS_g1 = dpt_g1[random_root(dpt_g1), ]
+#pseudotime_BSS_g2 = dpt_g2[random_root(dpt_g2), ] + max(pseudotime_BSS_g1)
+
+#diff.df$pt[diff.df$Spatial_1 > 10] = pseudotime_BSS_g1
+#diff.df$pt[diff.df$Spatial_1 < 11] = pseudotime_BSS_g2
+
+#DatasetDM <- DiffusionMap(diff.df[,1:4])
+#dpt = DPT(DatasetDM)
+#pseudotime_nuc = (dpt[random_root(dpt), ] )
+
+#diff.df$pt = as.numeric(pseudotime_nuc)
+diff.df = diff.df[order(diff.df$pt),]
+diff.df$rank = (1:nrow(diff.df))
+
+library(ggplot2)
+library(RColorBrewer)
+
+pdf("Nuc_young_cc_BSS1PCA_PT.pdf",width=4,height=3)
+ggplot(diff.df, aes(UMAP_1,UMAP_2, color=rank)) + geom_point( size=2 )+ xlab("UMAP 1") + ylab("UMAP 2")+scale_colour_gradientn(colors = c(rev(brewer.pal(11,"RdYlBu")[1:11])), space = "rgb", na.value = "grey50", guide = "colourbar") + xlim(min(diff.df$UMAP_1),max(diff.df$UMAP_1))+ylim(min(diff.df$UMAP_2),max(diff.df$UMAP_2)) +theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+dev.off()
+
+
+gene_names = c("DUT_SOLLC",
+"CCNB_DICDI",
+"CDK1_DICDI",
+"AURAA_XENLA",
+"TOP2_DICDI",
+"KI67_HUMAN",
+"DPOLN_MOUSE",
+"DNLI_HAEIN",
+"TOLB_PSEA6",
+"WDR54_MOUSE",
+"ACTN4_RAT",
+"CDC20_DICDI",
+"DPOLB_RAT",
+"RHOQ_HUMAN",
+"FORD_DICDI",
+"RASA2_MOUSE",
+"CDKA1_ORYSJ",
+"CCA11_ORYSJ",
+"TBB2_PHYPO",
+"MCM9_XENTR",
+"PATS1_DICDI")
+gene_ids = c("Phypoly-transcript-20038",
+"Phypoly-transcript-08256",
+"Phypoly-transcript-11405",
+"Phypoly-transcript-07863",
+"Phypoly-transcript-00381",
+"Phypoly-transcript-00261",
+"Phypoly-transcript-01132",
+"Phypoly-transcript-14390",
+"Phypoly-transcript-04660",
+"Phypoly-transcript-13888",
+"Phypoly-transcript-00407",
+"Phypoly-transcript-07151",
+"Phypoly-transcript-04465",
+"Phypoly-transcript-23095",
+"Phypoly-transcript-02192",
+"Phypoly-transcript-06376",
+"Phypoly-transcript-06666",
+"Phypoly-transcript-05693",
+"Phypoly-transcript-06678",
+"Phypoly-transcript-00963",
+"Phypoly-transcript-00502")
+		
+
+
+plot.df = FetchData(Nuc_young_cc, c("Phypoly-transcript-20038",
+"Phypoly-transcript-08256",
+"Phypoly-transcript-11405",
+"Phypoly-transcript-07863",
+"Phypoly-transcript-00381",
+"Phypoly-transcript-00261",
+"Phypoly-transcript-01132",
+"Phypoly-transcript-14390",
+"Phypoly-transcript-04660",
+"Phypoly-transcript-13888",
+"Phypoly-transcript-00407",
+"Phypoly-transcript-07151",
+"Phypoly-transcript-04465",
+"Phypoly-transcript-23095",
+"Phypoly-transcript-02192",
+"Phypoly-transcript-06376",
+"Phypoly-transcript-06666",
+"Phypoly-transcript-05693",
+"Phypoly-transcript-06678",
+"Phypoly-transcript-00963",
+"Phypoly-transcript-00502"))
+
+
+plot.df = cbind(plot.df,diff.df[match(rownames(plot.df),rownames(diff.df)),],stringsAsFactors = F)
+
+plot_list=list()
+count = 0
+for (i in colnames(plot.df[,gene_ids])) {
+  count = count + 1
+  plot_list[[i]]=ggplot(plot.df, aes(rank,plot.df[,i])) + geom_smooth(se = FALSE, method='loess',span = 10 ) + scale_color_manual(values = c('#88CCEE', '#44AA99', '#117733', '#332288', '#DDCC77', '#999933','#CC6677', '#882255', '#AA4499', '#DDDDDD')) + theme_bw() + theme(panel.border =  element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + labs(title=gene_names[count])
+#+ ylim(min(0),max(plot.df[i]))
+
+}
+
+pdf("./Nuc_young_cc_BSS1PCA_PT_CycleExpression.pdf",width=4.5,height=4)
+
+for (i in colnames(plot.df[,gene_ids])) {
+    print(plot_list[[i]])
+}
+dev.off()
+
+
+```
+
+```{r}
+# plot nGene
+
+tmp = rbind(FetchData(Nuc_old,c("nFeature_RNA","nCount_RNA","orig.ident")),FetchData(Nuc_young,c("nFeature_RNA","nCount_RNA","orig.ident")))
+tmp$stage[tmp$orig.ident %in% c("Nuc_young_B","Nuc_young_A")] = "young"
+tmp$stage[tmp$orig.ident %in% c("Nuc_old_Net","Nuc_old_Fan")] = "old"
+
+pdf("./Nuc_Histogram_nGene.pdf",width = 5, height = 5)
+ggplot(data = tmp, aes(x = nFeature_RNA,group = stage)) + geom_histogram(binwidth=50) + facet_wrap(.~stage)
+ggplot(data = tmp, aes(x = nCount_RNA,group = stage)) + geom_histogram(binwidth=50) + facet_wrap(.~stage)
+dev.off()
+
+```
+
